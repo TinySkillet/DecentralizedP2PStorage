@@ -1,7 +1,19 @@
 package main
 
-import "fmt"
+import (
+	"log"
+
+	"github.com/TinySkillet/DecentralizedP2PStorage/p2p"
+)
 
 func main() {
-	fmt.Println("Hello World")
+
+	transport := p2p.NewTCPTransport(":3000")
+
+	err := transport.ListenAndAccept()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	select {}
 }
