@@ -1,16 +1,24 @@
 package p2p
 
 import (
-	"encoding/gob"
 	"io"
 )
 
 type Decoder interface {
-	Decode(io.Reader, any) error
+	Decode(io.Reader, *RPC) error
 }
 
-type GOBDecoder struct{}
+type DefaultDecoder struct{}
 
-func (decoder GOBDecoder) Decode(r io.Reader, payload any) error {
-	return gob.NewDecoder(r).Decode(payload)
+func (decoder DefaultDecoder) Decode(r io.Reader, msg *RPC) error {
+	buf := make([]byte, 1024)
+
+	n, err := r.Read(buf)
+	if err != nil {
+		return err
+	}
+
+	msg.Payload = buf[:n]
+
+	return nil
 }
