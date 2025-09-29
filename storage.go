@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"io"
 	"log"
@@ -9,7 +11,7 @@ import (
 	"strings"
 )
 
-func CASPathTransformFunc(key string) string {
+func CASPathTransformFunc(key string) PathKey {
 	hash := sha1.Sum([]byte(key))
 	hashString := hex.EncodeToString(hash[:])
 
@@ -23,10 +25,18 @@ func CASPathTransformFunc(key string) string {
 		paths[i] = hashString[from:to]
 	}
 
-	return strings.Join(paths, "/")
+	return PathKey{
+		Pathname: strings.Join(paths, "/"),
+		Original: hashString,
+	}
 }
 
 type PathTransformFunc func(string) string
+
+type PathKey struct {
+	Pathname string
+	Original string
+}
 
 func DefaultPathTransformFunc(key string) string {
 	return key
@@ -53,7 +63,12 @@ func (s *Store) writeStream(key string, r io.Reader) error {
 		return err
 	}
 
-	filename := "somefilename"
+	buf := new(bytes.Buffer)
+	io.Copy(buf, r)
+
+	filenameBytes := sha256.Sum256(buf.Bytes())
+	filename := hex.EncodeToString(filenameBytes[:])
+
 	pathAndFileName := pathName + "/" + filename
 
 	f, err := os.Create(pathAndFileName)
@@ -61,7 +76,7 @@ func (s *Store) writeStream(key string, r io.Reader) error {
 		return err
 	}
 
-	n, err := io.Copy(f, r)
+	n, err := io.Copy(f, buf)
 	if err != nil {
 		return err
 	}
