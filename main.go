@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"time"
 
 	"github.com/TinySkillet/DecentralizedP2PStorage/p2p"
 )
@@ -15,24 +16,28 @@ func OnPeer(peer p2p.Peer) error {
 func main() {
 
 	tcpOpts := p2p.TCPTransportOpts{
-		ListenAddr: ":3000",
-		ShakeHands: p2p.NOPHandshakeFunc,
-		Decoder:    p2p.DefaultDecoder{},
-		OnPeer:     OnPeer,
+		ListenAddr:    ":3000",
+		HandshakeFunc: p2p.NOPHandshakeFunc,
+		Decoder:       p2p.DefaultDecoder{},
+		OnPeer:        OnPeer,
 	}
-	transport := p2p.NewTCPTransport(tcpOpts)
+	tcpTransport := p2p.NewTCPTransport(tcpOpts)
+
+	fileServerOpts := FileServerOpts{
+		PathTransformFunc: CASPathTransformFunc,
+		StorageRoot:       "3000_network",
+		Transport:         tcpTransport,
+	}
+
+	s := NewFileServer(fileServerOpts)
 
 	go func() {
-		for {
-			msg := <-transport.Consume()
-			log.Println(string(msg.Payload))
-		}
+		time.Sleep(time.Second * 3)
+		s.Stop()
 	}()
 
-	err := transport.ListenAndAccept()
-	if err != nil {
+	if err := s.Start(); err != nil {
 		log.Fatal(err)
 	}
 
-	select {}
 }
