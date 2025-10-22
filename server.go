@@ -41,22 +41,27 @@ func (s *FileServer) loop() {
 				log.Println(err)
 			}
 
-			fmt.Printf("Received: %s\n", string(msg.Payload.([]byte)))
-
-			peer, found := s.peers[rpc.From]
-			if !found {
-				panic("Peer not found in peers map")
+			if err := s.handleMessage(rpc.From, &msg); err != nil {
+				log.Println(err)
+				return
 			}
 
-			b := make([]byte, 1028)
-			if _, err := peer.Read(b); err != nil {
-				panic(err)
-			}
+			// fmt.Printf("Received: %v\n", msg.Payload)
 
-			fmt.Printf("Received payload: %s\n", string(b))
+			// peer, found := s.peers[rpc.From]
+			// if !found {
+			// 	panic("Peer not found in peers map")
+			// }
 
-			// TODO: make an separate interface instead of casting to TCPPeer
-			peer.(*p2p.TCPPeer).Wg.Done()
+			// b := make([]byte, 1028)
+			// if _, err := peer.Read(b); err != nil {
+			// 	panic(err)
+			// }
+
+			// fmt.Printf("Received payload: %s\n", string(b))
+
+			// // TODO: make an separate interface instead of casting to TCPPeer
+			// peer.(*p2p.TCPPeer).Wg.Done()
 
 		case <-s.quitch:
 			return
@@ -64,12 +69,27 @@ func (s *FileServer) loop() {
 	}
 }
 
-// func (s *FileServer) handleMessage(msg *Message) error {
-// 	// switch v := msg.Payload.(type) {
+func (s *FileServer) handleMessage(from string, msg *Message) error {
+	switch v := msg.Payload.(type) {
+	case MessageStoreFile:
+		return s.handleMessageStoreFile(from, v)
+	}
+	return nil
+}
 
-// 	// }
-// 	// return nil
-// }
+func (s *FileServer) handleMessageStoreFile(from string, msg MessageStoreFile) error {
+	peer, found := s.peers[from]
+	if !found {
+		return fmt.Errorf("peer (%s) could not be found in the peers map", from)
+	}
+
+	if err := s.store.Write(msg.Key, io.LimitReader(peer, msg.Size)); err != nil {
+		return err
+	}
+
+	peer.(*p2p.TCPPeer).Wg.Done()
+	return nil
+}
 
 func (s *FileServer) broadcast(msg *Message) error {
 
@@ -87,9 +107,11 @@ func (s *FileServer) broadcast(msg *Message) error {
 func (s *FileServer) StoreData(key string, r io.Reader) error {
 
 	buf := new(bytes.Buffer)
-
 	msg := Message{
-		Payload: []byte("storagekey"),
+		Payload: MessageStoreFile{
+			Key:  key,
+			Size: 15,
+		},
 	}
 
 	err := gob.NewEncoder(buf).Encode(msg)
@@ -169,6 +191,11 @@ func (s *FileServer) bootstrapNetwork() error {
 	return nil
 }
 
+// register MessageStoreFile on gob, since we use any for payload
+func init() {
+	gob.Register(MessageStoreFile{})
+}
+
 type FileServerOpts struct {
 	StorageRoot       string
 	PathTransformFunc PathTransformFunc
@@ -201,4 +228,9 @@ func NewFileServer(opts FileServerOpts) *FileServer {
 
 type Message struct {
 	Payload any
+}
+
+type MessageStoreFile struct {
+	Key  string
+	Size int64
 }
