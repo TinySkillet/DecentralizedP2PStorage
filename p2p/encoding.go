@@ -11,7 +11,7 @@ type Decoder interface {
 type DefaultDecoder struct{}
 
 func (decoder DefaultDecoder) Decode(r io.Reader, msg *RPC) error {
-	buf := make([]byte, 1024)
+	buf := make([]byte, 2028)
 
 	n, err := r.Read(buf)
 	if err != nil {
