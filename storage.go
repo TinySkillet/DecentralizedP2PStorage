@@ -48,7 +48,7 @@ func (s *Store) Read(key string) (io.Reader, error) {
 	return buf, err
 }
 
-func (s *Store) Write(key string, r io.Reader) error {
+func (s *Store) Write(key string, r io.Reader) (int64, error) {
 	return s.writeStream(key, r)
 }
 
@@ -92,29 +92,27 @@ func (s *Store) readStream(key string) (io.ReadCloser, error) {
 	return os.Open(fullPath)
 }
 
-func (s *Store) writeStream(key string, r io.Reader) error {
+func (s *Store) writeStream(key string, r io.Reader) (int64, error) {
 
 	pathKey := s.PathTransformFunc(key)
 
 	pathnameWithRoot := fmt.Sprintf("%s/%s", s.Root, pathKey.Pathname)
 	if err := os.MkdirAll(pathnameWithRoot, os.ModePerm); err != nil {
-		return err
+		return 0, err
 	}
 
 	fullPath := fmt.Sprintf("%s/%s", s.Root, pathKey.FullPath())
 
 	f, err := os.Create(fullPath)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	n, err := io.Copy(f, r)
 	if err != nil {
-		return err
+		return 0, err
 	}
-
-	log.Printf("written %d bytes to disk: %s\n", n, fullPath)
-	return nil
+	return n, nil
 }
 
 type PathTransformFunc func(string) PathKey
