@@ -13,13 +13,18 @@ func (t TCPTransport) Close() error {
 	return t.listener.Close()
 }
 
+// Implements the Transport interface
+func (t *TCPTransport) Address() string {
+	return t.ListenAddr
+}
+
 // Consume implements the Transport interface, which returns a read only channel for
 // reading incoming messages from another peer
 func (t *TCPTransport) Consume() <-chan RPC {
 	return t.rpcChan
 }
 
-// Dial implements the Transport interface
+// Implements the Transport interface
 func (t *TCPTransport) Dial(addr string) error {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
@@ -78,8 +83,8 @@ func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
 	}
 
 	// Read Loop
-	rpc := RPC{}
 	for {
+		rpc := RPC{}
 		err = t.Decoder.Decode(conn, &rpc)
 		if err != nil {
 			return
@@ -88,11 +93,11 @@ func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
 		rpc.From = conn.RemoteAddr().String()
 
 		if rpc.Stream {
-			peer.Wg.Add(1)
+			peer.wg.Add(1)
 			fmt.Printf("Incoming stream from [%s], waiting till stream is done...\n", conn.RemoteAddr().String())
 
-			peer.Wg.Wait()
-			fmt.Printf("Stream from [%s] closed. Resuming normal read loop.", conn.RemoteAddr().String())
+			peer.wg.Wait()
+			fmt.Printf("Stream from [%s] closed. Resuming normal read loop.\n", conn.RemoteAddr().String())
 
 			continue
 		}
@@ -111,20 +116,25 @@ type TCPPeer struct {
 	// If we accept and retrieve a conn:  outbound = false.
 	outbound bool
 
-	Wg *sync.WaitGroup
+	wg *sync.WaitGroup
 }
 
-// Send implements the Peer interface
+// implements the Peer interface
 func (p *TCPPeer) Send(b []byte) error {
 	_, err := p.Conn.Write(b)
 	return err
+}
+
+// implements the Peer interface
+func (p *TCPPeer) CloseStream() {
+	p.wg.Done()
 }
 
 func NewTCPPeer(conn net.Conn, outbound bool) *TCPPeer {
 	return &TCPPeer{
 		Conn:     conn,
 		outbound: outbound,
-		Wg:       &sync.WaitGroup{},
+		wg:       &sync.WaitGroup{},
 	}
 }
 
@@ -144,6 +154,6 @@ type TCPTransport struct {
 func NewTCPTransport(opts TCPTransportOpts) *TCPTransport {
 	return &TCPTransport{
 		TCPTransportOpts: opts,
-		rpcChan:          make(chan RPC),
+		rpcChan:          make(chan RPC, 1024),
 	}
 }

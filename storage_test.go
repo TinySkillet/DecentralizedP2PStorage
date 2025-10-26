@@ -57,7 +57,7 @@ func TestStore(t *testing.T) {
 
 		assert.False(t, s.Has("tero bau"))
 
-		r, err := s.Read(key)
+		_, r, err := s.Read(key)
 		if err != nil {
 			t.Error(err)
 		}

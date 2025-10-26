@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"crypto/sha1"
 	"encoding/hex"
 	"errors"
@@ -35,17 +34,8 @@ func CASPathTransformFunc(key string) PathKey {
 	}
 }
 
-func (s *Store) Read(key string) (io.Reader, error) {
-	f, err := s.readStream(key)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	buf := new(bytes.Buffer)
-	_, err = io.Copy(buf, f)
-
-	return buf, err
+func (s *Store) Read(key string) (int64, io.Reader, error) {
+	return s.readStream(key)
 }
 
 func (s *Store) Write(key string, r io.Reader) (int64, error) {
@@ -85,11 +75,22 @@ func (s *Store) Has(key string) bool {
 	return true
 }
 
-func (s *Store) readStream(key string) (io.ReadCloser, error) {
+func (s *Store) readStream(key string) (int64, io.ReadCloser, error) {
 	pathKey := s.PathTransformFunc(key)
 
 	fullPath := fmt.Sprintf("%s/%s", s.Root, pathKey.FullPath())
-	return os.Open(fullPath)
+
+	fileInfo, err := os.Stat(fullPath)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	file, err := os.Open(fullPath)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	return fileInfo.Size(), file, err
 }
 
 func (s *Store) writeStream(key string, r io.Reader) (int64, error) {
