@@ -1,0 +1,89 @@
+package main
+
+import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"errors"
+	"io"
+)
+
+func newEcryptionKey() []byte {
+	keyBuf := make([]byte, 32)
+	io.ReadFull(rand.Reader, keyBuf)
+	return keyBuf
+}
+
+func copyDecrypt(key []byte, src io.Reader, dest io.Writer) (int64, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return 0, err
+	}
+
+	// read iv from the given io.Reader which in our case should be
+	// the block.BlockSize() bytes we read
+	iv := make([]byte, block.BlockSize())
+	if _, err := src.Read(iv); err != nil {
+		return 0, err
+	}
+
+	var (
+		buf    = make([]byte, 32*1024)
+		stream = cipher.NewCTR(block, iv)
+	)
+
+	for {
+		n, err := src.Read(buf)
+		if n > 0 {
+			stream.XORKeyStream(buf, buf[:n])
+			if _, err := dest.Write(buf[:n]); err != nil {
+				return 0, err
+			}
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return 0, err
+		}
+	}
+	return 0, nil
+}
+
+func copyEncrypt(key []byte, src io.Reader, dest io.Writer) (int64, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return 0, err
+	}
+
+	iv := make([]byte, block.BlockSize()) // 16 bytes
+	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
+		return 0, err
+	}
+
+	// prepend the iv to the file
+	if _, err := dest.Write(iv); err != nil {
+		return 0, err
+	}
+
+	var (
+		buf    = make([]byte, 32*1024) // buffer size used by the standard library (io.go) copyBuffer func
+		stream = cipher.NewCTR(block, iv)
+	)
+	for {
+		n, err := src.Read(buf)
+		if n > 0 {
+			stream.XORKeyStream(buf, buf[:n])
+			if _, err := dest.Write(buf[:n]); err != nil {
+				return 0, err
+			}
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return 0, err
+		}
+	}
+	return 0, nil
+}

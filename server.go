@@ -120,9 +120,9 @@ func (s *FileServer) handleMessageGetFile(from string, msg MessageGetFile) error
 	}
 
 	// send the 'IncomingStream' byte to the peer first
-	// then we can send the file size
 	peer.Send([]byte{p2p.IncomingStream})
 
+	// then we can send the file size
 	binary.Write(peer, binary.LittleEndian, size)
 
 	n, err := io.Copy(peer, r)
