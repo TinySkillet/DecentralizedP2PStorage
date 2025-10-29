@@ -14,43 +14,24 @@ func newEcryptionKey() []byte {
 	return keyBuf
 }
 
-func copyDecrypt(key []byte, src io.Reader, dest io.Writer) (int64, error) {
+func copyDecrypt(key []byte, src io.Reader, dest io.Writer) (int, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return 0, err
 	}
 
-	// read iv from the given io.Reader which in our case should be
-	// the block.BlockSize() bytes we read
+	// read iv from the given io.Reader which in our case
+	//  should be the block.BlockSize() bytes we read
 	iv := make([]byte, block.BlockSize())
 	if _, err := src.Read(iv); err != nil {
 		return 0, err
 	}
 
-	var (
-		buf    = make([]byte, 32*1024)
-		stream = cipher.NewCTR(block, iv)
-	)
-
-	for {
-		n, err := src.Read(buf)
-		if n > 0 {
-			stream.XORKeyStream(buf, buf[:n])
-			if _, err := dest.Write(buf[:n]); err != nil {
-				return 0, err
-			}
-		}
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return 0, err
-		}
-	}
-	return 0, nil
+	stream := cipher.NewCTR(block, iv)
+	return copyStream(stream, block.BlockSize(), src, dest)
 }
 
-func copyEncrypt(key []byte, src io.Reader, dest io.Writer) (int64, error) {
+func copyEncrypt(key []byte, src io.Reader, dest io.Writer) (int, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return 0, err
@@ -66,17 +47,24 @@ func copyEncrypt(key []byte, src io.Reader, dest io.Writer) (int64, error) {
 		return 0, err
 	}
 
+	stream := cipher.NewCTR(block, iv)
+	return copyStream(stream, block.BlockSize(), src, dest)
+}
+
+func copyStream(stream cipher.Stream, blockSize int, src io.Reader, dest io.Writer) (int, error) {
 	var (
-		buf    = make([]byte, 32*1024) // buffer size used by the standard library (io.go) copyBuffer func
-		stream = cipher.NewCTR(block, iv)
+		buf = make([]byte, 32*1024) // buffer size used by the standard library (io.go) copyBuffer func
+		nw  = blockSize
 	)
 	for {
 		n, err := src.Read(buf)
 		if n > 0 {
 			stream.XORKeyStream(buf, buf[:n])
-			if _, err := dest.Write(buf[:n]); err != nil {
+			c, err := dest.Write(buf[:n])
+			if err != nil {
 				return 0, err
 			}
+			nw += c
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
@@ -85,5 +73,5 @@ func copyEncrypt(key []byte, src io.Reader, dest io.Writer) (int64, error) {
 			return 0, err
 		}
 	}
-	return 0, nil
+	return nw, nil
 }

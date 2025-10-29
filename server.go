@@ -30,7 +30,7 @@ func (s *FileServer) Start() error {
 func (s *FileServer) loop() {
 
 	defer func() {
-		log.Println("File server stopped due to error or user quit action")
+		log.Printf("[%s] File server stopped due to error or user quit action\n", s.Transport.Address())
 	}()
 
 	for {
@@ -39,11 +39,11 @@ func (s *FileServer) loop() {
 			var msg Message
 			err := gob.NewDecoder(bytes.NewReader(rpc.Payload)).Decode(&msg)
 			if err != nil {
-				log.Println("Decoding error: ", err)
+				log.Printf("[%s] Decoding error: %v", s.Transport.Address(), err)
 			}
 
 			if err := s.handleMessage(rpc.From, &msg); err != nil {
-				log.Println("Error while handling message: \n", err)
+				log.Printf("[%s] Error while handling message: %v\n", s.Transport.Address(), err)
 			}
 
 			// fmt.Printf("Received: %v\n", msg.Payload)
@@ -190,7 +190,7 @@ func (s *FileServer) Get(key string) (int64, io.Reader, error) {
 		var fileSize int64
 		binary.Read(peer, binary.LittleEndian, &fileSize)
 
-		n, err := s.store.Write(key, io.LimitReader(peer, fileSize))
+		n, err := s.store.WriteDecrypt(s.EncryptionKey, key, io.LimitReader(peer, fileSize))
 		if err != nil {
 			return 0, nil, err
 		}
@@ -216,7 +216,7 @@ func (s *FileServer) Store(key string, r io.Reader) error {
 	msg := Message{
 		Payload: MessageStoreFile{
 			Key:  key,
-			Size: size,
+			Size: size + 16, // IV which is 16 bytes is prepended
 		},
 	}
 
@@ -224,22 +224,24 @@ func (s *FileServer) Store(key string, r io.Reader) error {
 		return err
 	}
 
-	time.Sleep(3 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 
-	// TODO: use a multiwriter
+	peers := []io.Writer{}
+
 	for _, peer := range s.peers {
-		// then send the payload
-		peer.Send([]byte{p2p.IncomingStream})
-		n, err := io.Copy(peer, fileBuf)
-		if err != nil {
-			return err
-		}
-
-		fmt.Println("Received and written bytes to disk: ", n)
+		peers = append(peers, peer)
 	}
 
-	return nil
+	mw := io.MultiWriter(peers...)
+	mw.Write([]byte{p2p.IncomingStream})
+	n, err := copyEncrypt(s.EncryptionKey, fileBuf, mw)
+	if err != nil {
+		return err
+	}
 
+	fmt.Printf("[%s] Received and written %d bytes to disk\n", s.Transport.Address(), n)
+
+	return nil
 }
 
 func (s *FileServer) Stop() {
@@ -252,7 +254,7 @@ func (s *FileServer) OnPeer(p p2p.Peer) error {
 
 	s.peers[p.RemoteAddr().String()] = p
 
-	log.Printf("Connected with remote %s\n", p.RemoteAddr().String())
+	fmt.Printf("[%s] Connected with remote %s\n", s.Transport.Address(), p.RemoteAddr().String())
 	return nil
 }
 
@@ -262,11 +264,11 @@ func (s *FileServer) bootstrapNetwork() error {
 			continue
 		}
 		go func(addr string) {
-			fmt.Println("Attempting to connect with remote: ", addr)
+			fmt.Printf("[%s] Attempting to connect with remote: %s\n", s.Transport.Address(), addr)
 
 			err := s.Transport.Dial(addr)
 			if err != nil {
-				log.Println("Dial error: ", err)
+				fmt.Printf("[%s] Dial error: %v\n", s.Transport.Address(), err)
 			}
 		}(addr)
 	}
@@ -280,6 +282,7 @@ func init() {
 }
 
 type FileServerOpts struct {
+	EncryptionKey     []byte
 	StorageRoot       string
 	PathTransformFunc PathTransformFunc
 	Transport         p2p.Transport

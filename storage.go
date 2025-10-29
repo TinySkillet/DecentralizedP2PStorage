@@ -42,11 +42,29 @@ func (s *Store) Write(key string, r io.Reader) (int64, error) {
 	return s.writeStream(key, r)
 }
 
+func (s *Store) WriteDecrypt(encryptionKey []byte, key string, r io.Reader) (int64, error) {
+
+	f, err := s.openFileForWriting(key)
+	if err != nil {
+		return 0, err
+	}
+	n, err := copyDecrypt(encryptionKey, r, f)
+	return int64(n), err
+}
+
+func (s *Store) writeStream(key string, r io.Reader) (int64, error) {
+	f, err := s.openFileForWriting(key)
+	if err != nil {
+		return 0, err
+	}
+	return io.Copy(f, r)
+}
+
 func (s *Store) Delete(key string) error {
 	pathKey := s.PathTransformFunc(key)
 
 	defer func() {
-		log.Printf("Deleted [%s] from disk", pathKey.Filename)
+		log.Printf("Deleted [%s] from disk\n", pathKey.Filename)
 	}()
 
 	parentDir := strings.Split(pathKey.FullPath(), "/")[0]
@@ -93,27 +111,16 @@ func (s *Store) readStream(key string) (int64, io.ReadCloser, error) {
 	return fileInfo.Size(), file, err
 }
 
-func (s *Store) writeStream(key string, r io.Reader) (int64, error) {
-
+func (s *Store) openFileForWriting(key string) (*os.File, error) {
 	pathKey := s.PathTransformFunc(key)
 
 	pathnameWithRoot := fmt.Sprintf("%s/%s", s.Root, pathKey.Pathname)
 	if err := os.MkdirAll(pathnameWithRoot, os.ModePerm); err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	fullPath := fmt.Sprintf("%s/%s", s.Root, pathKey.FullPath())
-
-	f, err := os.Create(fullPath)
-	if err != nil {
-		return 0, err
-	}
-
-	n, err := io.Copy(f, r)
-	if err != nil {
-		return 0, err
-	}
-	return n, nil
+	return os.Create(fullPath)
 }
 
 type PathTransformFunc func(string) PathKey

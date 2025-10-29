@@ -54,10 +54,10 @@ func (t *TCPTransport) startAcceptLoop() {
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
-			log.Printf("TCP accept error: %s\n", err)
+			fmt.Printf("[%s] TCP accept error: %v\n", t.ListenAddr, err)
 		}
 
-		log.Printf("New Incoming Connection: %+v\n", conn.RemoteAddr().String())
+		fmt.Printf("[%s] New Incoming Connection: %+v\n", t.ListenAddr, conn.RemoteAddr().String())
 		go t.handleConn(conn, false)
 	}
 }
@@ -66,7 +66,7 @@ func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
 	var err error
 
 	defer func() {
-		log.Printf("Dropping peer connection: %s\n", err)
+		fmt.Printf("[%s] Dropping peer connection: %v\n", t.ListenAddr, err)
 		conn.Close()
 	}()
 
@@ -94,10 +94,10 @@ func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
 
 		if rpc.Stream {
 			peer.wg.Add(1)
-			fmt.Printf("Incoming stream from [%s], waiting till stream is done...\n", conn.RemoteAddr().String())
+			fmt.Printf("[%s] Incoming stream from [%s], waiting till stream is done...\n", t.ListenAddr, conn.RemoteAddr().String())
 
 			peer.wg.Wait()
-			fmt.Printf("Stream from [%s] closed. Resuming normal read loop.\n", conn.RemoteAddr().String())
+			fmt.Printf("[%s] Stream from [%s] closed. Resuming normal read loop.\n", t.ListenAddr, conn.RemoteAddr().String())
 
 			continue
 		}

@@ -18,8 +18,13 @@ func TestCopyEncyptDecrypt(t *testing.T) {
 	}
 
 	out := new(bytes.Buffer)
-	if _, err := copyDecrypt(key, dest, out); err != nil {
+	nw, err := copyDecrypt(key, dest, out)
+	if err != nil {
 		t.Error(err)
+	}
+
+	if nw != 16+len(payload) {
+		t.Fail()
 	}
 
 	if out.String() != payload {
