@@ -163,3 +163,11 @@ func NewStore(opts StoreOpts) *Store {
 		StoreOpts: opts,
 	}
 }
+
+// FullPathForKey returns the absolute path on disk where the file for the given
+// logical key is stored. This is useful for metadata recording. It does not
+// perform any filesystem access.
+func (s *Store) FullPathForKey(key string) string {
+	pathKey := s.PathTransformFunc(key)
+	return fmt.Sprintf("%s/%s", s.Root, pathKey.FullPath())
+}

@@ -10,6 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"context"
+
+	dbpkg "github.com/TinySkillet/DecentralizedP2PStorage/db"
 	"github.com/TinySkillet/DecentralizedP2PStorage/p2p"
 )
 
@@ -213,6 +216,17 @@ func (s *FileServer) Store(key string, r io.Reader) error {
 		return err
 	}
 
+	// Record file metadata if DB is configured
+	if s.DB != nil {
+		_ = s.DB.InsertFileWithKey(context.Background(), dbpkg.File{
+			ID:        hashKey(key),
+			Name:      key,
+			Hash:      hashKey(key),
+			Size:      size,
+			LocalPath: s.store.FullPathForKey(key),
+		}, "default")
+	}
+
 	msg := Message{
 		Payload: MessageStoreFile{
 			Key:  hashKey(key),
@@ -248,13 +262,22 @@ func (s *FileServer) Stop() {
 	close(s.quitch)
 }
 
+// in OnPeer
 func (s *FileServer) OnPeer(p p2p.Peer) error {
 	s.peersLock.Lock()
 	defer s.peersLock.Unlock()
-
 	s.peers[p.RemoteAddr().String()] = p
-
 	fmt.Printf("[%s] Connected with remote %s\n", s.Transport.Address(), p.RemoteAddr().String())
+
+	if s.DB != nil {
+		now := time.Now()
+		_ = s.DB.UpsertPeer(context.Background(), dbpkg.Peer{
+			ID:       p.RemoteAddr().String(),
+			Address:  p.RemoteAddr().String(),
+			Status:   "connected",
+			LastSeen: &now,
+		})
+	}
 	return nil
 }
 
@@ -287,6 +310,7 @@ type FileServerOpts struct {
 	PathTransformFunc PathTransformFunc
 	Transport         p2p.Transport
 	BootstrapNodes    []string
+	DB                *dbpkg.DB
 }
 
 type FileServer struct {
