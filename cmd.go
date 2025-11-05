@@ -76,7 +76,13 @@ func setupCommands() *cobra.Command {
 			s := makeServerWithDB(listen, d, bootstrap...)
 			s.EncryptionKey = keyBytes
 			go func() { log.Fatal(s.Start()) }()
+			// Wait for connections to establish
 			time.Sleep(500 * time.Millisecond)
+			if len(bootstrap) > 0 {
+				if err := s.waitForPeers(5 * time.Second); err != nil {
+					fmt.Printf("Warning: %v. Proceeding with store anyway.\n", err)
+				}
+			}
 			return s.Store(key, f)
 		},
 	}
@@ -108,7 +114,13 @@ func setupCommands() *cobra.Command {
 			s := makeServerWithDB(listen, d, bootstrap...)
 			s.EncryptionKey = keyBytes
 			go func() { log.Fatal(s.Start()) }()
+			// Wait for connections to establish
 			time.Sleep(500 * time.Millisecond)
+			if len(bootstrap) > 0 {
+				if err := s.waitForPeers(5 * time.Second); err != nil {
+					fmt.Printf("Warning: %v. Proceeding with get anyway.\n", err)
+				}
+			}
 			_, r, err := s.Get(key)
 			if err != nil {
 				return err
@@ -133,7 +145,7 @@ func setupCommands() *cobra.Command {
 
 	deleteCmd := &cobra.Command{
 		Use:   "delete <key>",
-		Short: "Delete a file locally",
+		Short: "Delete a file locally and from all peers",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key := args[0]
@@ -154,8 +166,14 @@ func setupCommands() *cobra.Command {
 			s := makeServerWithDB(listen, d, bootstrap...)
 			s.EncryptionKey = keyBytes
 			go func() { log.Fatal(s.Start()) }()
+			// Wait for connections to establish
 			time.Sleep(500 * time.Millisecond)
-			return s.store.Delete(key)
+			if len(bootstrap) > 0 {
+				if err := s.waitForPeers(5 * time.Second); err != nil {
+					fmt.Printf("Warning: %v. Proceeding with delete anyway.\n", err)
+				}
+			}
+			return s.Delete(key)
 		},
 	}
 	deleteCmd.Flags().StringVar(&listen, "listen", ":3000", "listen address")

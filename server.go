@@ -49,23 +49,6 @@ func (s *FileServer) loop() {
 				log.Printf("[%s] Error while handling message: %v\n", s.Transport.Address(), err)
 			}
 
-			// fmt.Printf("Received: %v\n", msg.Payload)
-
-			// peer, found := s.peers[rpc.From]
-			// if !found {
-			// 	panic("Peer not found in peers map")
-			// }
-
-			// b := make([]byte, 1028)
-			// if _, err := peer.Read(b); err != nil {
-			// 	panic(err)
-			// }
-
-			// fmt.Printf("Received payload: %s\n", string(b))
-
-			// // TODO: make an separate interface instead of casting to TCPPeer
-			// peer.(*p2p.TCPPeer).Wg.Done()
-
 		case <-s.quitch:
 			return
 		}
@@ -78,6 +61,8 @@ func (s *FileServer) handleMessage(from string, msg *Message) error {
 		return s.handleMessageStoreFile(from, v)
 	case MessageGetFile:
 		return s.handleMessageGetFile(from, v)
+	case MessageDeleteFile:
+		return s.handleMessageDeleteFile(from, v)
 	}
 	return nil
 }
@@ -137,6 +122,53 @@ func (s *FileServer) handleMessageGetFile(from string, msg MessageGetFile) error
 	return nil
 }
 
+func (s *FileServer) handleMessageDeleteFile(from string, msg MessageDeleteFile) error {
+	fmt.Printf("[%s] Received delete request for file with hash '%s' from %s\n", s.Transport.Address(), msg.Key, from)
+
+	// The msg.Key is the hashed key. Files can be stored in two ways:
+	// 1. Locally stored with original key (metadata in DB, file stored with hashed path)
+	// 2. Received from peer with hashed key (no metadata, file stored with double-hashed path)
+	// We need to try both approaches.
+
+	var originalKey string
+	if s.DB != nil {
+		// Try to find the file by hash in the database to get the original key
+		files, err := s.DB.ListFiles(context.Background())
+		if err == nil {
+			for _, f := range files {
+				if f.Hash == msg.Key {
+					originalKey = f.Name
+					break
+				}
+			}
+		}
+	}
+
+	// First, try to delete using original key (if file was stored locally)
+	if originalKey != "" {
+		if s.store.Has(originalKey) {
+			if err := s.store.Delete(originalKey); err != nil {
+				return fmt.Errorf("[%s] Error deleting file '%s': %v", s.Transport.Address(), originalKey, err)
+			}
+			fmt.Printf("[%s] Deleted file '%s' from local storage\n", s.Transport.Address(), originalKey)
+			return nil
+		}
+	}
+
+	// If original key approach didn't work, try deleting using the hashed key directly
+	// (for files received from peers, which were stored with the hashed key)
+	if s.store.Has(msg.Key) {
+		if err := s.store.Delete(msg.Key); err != nil {
+			return fmt.Errorf("[%s] Error deleting file with hash '%s': %v", s.Transport.Address(), msg.Key, err)
+		}
+		fmt.Printf("[%s] Deleted file with hash '%s' from local storage\n", s.Transport.Address(), msg.Key)
+		return nil
+	}
+
+	fmt.Printf("[%s] File with hash '%s' does not exist locally, skipping deletion\n", s.Transport.Address(), msg.Key)
+	return nil
+}
+
 func (s *FileServer) stream(msg *Message) error {
 
 	// Peer implements net.Conn which implements Writer interface
@@ -156,9 +188,14 @@ func (s *FileServer) broadcast(msg *Message) error {
 		return err
 	}
 
-	for _, peer := range s.peers {
+	s.peersLock.Lock()
+	defer s.peersLock.Unlock()
+
+	for addr, peer := range s.peers {
+		fmt.Printf("[%s] Sending message to peer %s\n", s.Transport.Address(), addr)
 		peer.Send([]byte{p2p.IncomingMessage})
 		if err := peer.Send(buf.Bytes()); err != nil {
+			fmt.Printf("[%s] Error sending message to peer %s: %v\n", s.Transport.Address(), addr, err)
 			return err
 		}
 	}
@@ -258,6 +295,49 @@ func (s *FileServer) Store(key string, r io.Reader) error {
 	return nil
 }
 
+func (s *FileServer) Delete(key string) error {
+	// Delete locally first
+	if !s.store.Has(key) {
+		fmt.Printf("[%s] File '%s' does not exist locally\n", s.Transport.Address(), key)
+		// Still broadcast the delete in case other peers have it
+	} else {
+		if err := s.store.Delete(key); err != nil {
+			return err
+		}
+		fmt.Printf("[%s] Deleted file '%s' from local storage\n", s.Transport.Address(), key)
+	}
+
+	// Check if we have any peers connected
+	s.peersLock.Lock()
+	peerCount := len(s.peers)
+	peerAddrs := make([]string, 0, len(s.peers))
+	for addr := range s.peers {
+		peerAddrs = append(peerAddrs, addr)
+	}
+	s.peersLock.Unlock()
+
+	fmt.Printf("[%s] Connected to %d peer(s): %v\n", s.Transport.Address(), peerCount, peerAddrs)
+
+	if peerCount == 0 {
+		fmt.Printf("[%s] No peers connected, cannot broadcast delete message\n", s.Transport.Address())
+		return nil
+	}
+
+	// Broadcast delete message to all peers
+	msg := Message{
+		Payload: MessageDeleteFile{
+			Key: hashKey(key),
+		},
+	}
+
+	if err := s.broadcast(&msg); err != nil {
+		return err
+	}
+
+	fmt.Printf("[%s] Broadcasted delete request for '%s' to %d peer(s)\n", s.Transport.Address(), key, peerCount)
+	return nil
+}
+
 func (s *FileServer) Stop() {
 	close(s.quitch)
 }
@@ -298,10 +378,27 @@ func (s *FileServer) bootstrapNetwork() error {
 	return nil
 }
 
+// waitForPeers waits for at least one peer connection, with a timeout
+func (s *FileServer) waitForPeers(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		s.peersLock.Lock()
+		peerCount := len(s.peers)
+		s.peersLock.Unlock()
+
+		if peerCount > 0 {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("timeout waiting for peer connections")
+}
+
 // register MessageStoreFile on gob, since we use any for payload
 func init() {
 	gob.Register(MessageStoreFile{})
 	gob.Register(MessageGetFile{})
+	gob.Register(MessageDeleteFile{})
 }
 
 type FileServerOpts struct {
@@ -346,5 +443,9 @@ type MessageStoreFile struct {
 }
 
 type MessageGetFile struct {
+	Key string
+}
+
+type MessageDeleteFile struct {
 	Key string
 }
