@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	dbpkg "github.com/TinySkillet/DecentralizedP2PStorage/db"
@@ -197,14 +198,58 @@ func setupCommands() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if len(ff) == 0 {
+				fmt.Println("No files found.")
+				return nil
+			}
+			fmt.Printf("%-20s\t%-10s\t%s\n", "FILE", "SIZE", "CREATED")
+			fmt.Println(strings.Repeat("-", 60))
 			for _, f := range ff {
-				fmt.Printf("%s\t%s\t%d\t%s\n", f.ID, f.Name, f.Size, f.LocalPath)
+				fmt.Printf("%-20s\t%-10d\t%s\n",
+					f.Name,
+					f.Size,
+					f.CreatedAt.Format("2006-01-02 15:04:05"))
 			}
 			return nil
 		},
 	}
 	filesCmd.AddCommand(filesListCmd)
 	root.AddCommand(filesCmd)
+
+	sharesCmd := &cobra.Command{
+		Use:   "shares",
+		Short: "List file shares (files stored in other peers)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			d, err := dbpkg.Open(dbPath)
+			if err != nil {
+				return err
+			}
+			defer d.Close()
+			if err := d.Migrate(context.Background()); err != nil {
+				return err
+			}
+			shares, err := d.ListShares(context.Background())
+			if err != nil {
+				return err
+			}
+			if len(shares) == 0 {
+				fmt.Println("No shares found.")
+				return nil
+			}
+			fmt.Printf("%-20s\t%-20s\t%-15s\t%-10s\t%s\n", "FILE", "PEER", "DIRECTION", "SIZE", "CREATED")
+			fmt.Println(strings.Repeat("-", 100))
+			for _, s := range shares {
+				fmt.Printf("%-20s\t%-20s\t%-15s\t%-10d\t%s\n",
+					s.FileName,
+					s.PeerID,
+					s.Direction,
+					s.FileSize,
+					s.CreatedAt.Format("2006-01-02 15:04:05"))
+			}
+			return nil
+		},
+	}
+	root.AddCommand(sharesCmd)
 
 	// demo: preserves old behavior behind a command
 	demoCmd := &cobra.Command{

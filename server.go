@@ -80,6 +80,17 @@ func (s *FileServer) handleMessageStoreFile(from string, msg MessageStoreFile) e
 
 	fmt.Printf("[%s] Written %d bytes to disk\n", s.Transport.Address(), n)
 
+	// Record share in database if configured
+	if s.DB != nil {
+		shareID := hashKey(msg.Key + from + "incoming")
+		_ = s.DB.InsertShare(context.Background(), dbpkg.Share{
+			ID:        shareID,
+			FileID:    msg.Key,
+			PeerID:    from,
+			Direction: "incoming",
+		})
+	}
+
 	peer.CloseStream()
 	return nil
 }
@@ -141,6 +152,16 @@ func (s *FileServer) handleMessageDeleteFile(from string, msg MessageDeleteFile)
 					break
 				}
 			}
+		}
+	}
+
+	// Delete from database if configured
+	if s.DB != nil {
+		if err := s.DB.DeleteFile(context.Background(), msg.Key); err != nil {
+			// Log error but continue with deletion
+			fmt.Printf("[%s] Warning: error deleting file with hash '%s' from database: %v\n", s.Transport.Address(), msg.Key, err)
+		} else {
+			fmt.Printf("[%s] Deleted file with hash '%s' from database\n", s.Transport.Address(), msg.Key)
 		}
 	}
 
@@ -278,10 +299,14 @@ func (s *FileServer) Store(key string, r io.Reader) error {
 	time.Sleep(500 * time.Millisecond)
 
 	peers := []io.Writer{}
+	peerAddrs := []string{}
 
-	for _, peer := range s.peers {
+	s.peersLock.Lock()
+	for addr, peer := range s.peers {
 		peers = append(peers, peer)
+		peerAddrs = append(peerAddrs, addr)
 	}
+	s.peersLock.Unlock()
 
 	mw := io.MultiWriter(peers...)
 	mw.Write([]byte{p2p.IncomingStream})
@@ -290,12 +315,37 @@ func (s *FileServer) Store(key string, r io.Reader) error {
 		return err
 	}
 
+	// Record shares for each peer that received the file
+	if s.DB != nil {
+		fileID := hashKey(key)
+		for _, addr := range peerAddrs {
+			shareID := hashKey(fileID + addr + "outgoing")
+			_ = s.DB.InsertShare(context.Background(), dbpkg.Share{
+				ID:        shareID,
+				FileID:    fileID,
+				PeerID:    addr,
+				Direction: "outgoing",
+			})
+		}
+	}
+
 	fmt.Printf("[%s] Received and written %d bytes to disk\n", s.Transport.Address(), n)
 
 	return nil
 }
 
 func (s *FileServer) Delete(key string) error {
+	// Delete from database if configured
+	if s.DB != nil {
+		fileID := hashKey(key)
+		if err := s.DB.DeleteFile(context.Background(), fileID); err != nil {
+			// Log error but continue with deletion
+			fmt.Printf("[%s] Warning: error deleting file '%s' from database: %v\n", s.Transport.Address(), key, err)
+		} else {
+			fmt.Printf("[%s] Deleted file '%s' from database\n", s.Transport.Address(), key)
+		}
+	}
+
 	// Delete locally first
 	if !s.store.Has(key) {
 		fmt.Printf("[%s] File '%s' does not exist locally\n", s.Transport.Address(), key)

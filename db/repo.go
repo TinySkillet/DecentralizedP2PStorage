@@ -135,3 +135,80 @@ func (d *DB) GetOrCreateDefaultKey(ctx context.Context, gen func() []byte) ([]by
 	}
 	return keyBytes, nil
 }
+
+// ShareInfo contains share information with file details.
+type ShareInfo struct {
+	Share
+	FileName string
+	FileSize int64
+}
+
+// InsertShare inserts or updates a share record.
+// shareID is typically a hash of fileID + peerID + direction to ensure uniqueness.
+func (d *DB) InsertShare(ctx context.Context, share Share) error {
+	_, err := d.sql.ExecContext(ctx, `
+		INSERT INTO shares(id, file_id, peer_id, direction, created_at)
+		VALUES(?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(id) DO UPDATE SET
+			created_at = excluded.created_at
+	`, share.ID, share.FileID, share.PeerID, share.Direction)
+	return err
+}
+
+// ListShares returns all share records with file information.
+func (d *DB) ListShares(ctx context.Context) ([]ShareInfo, error) {
+	rows, err := d.sql.QueryContext(ctx, `
+		SELECT s.id, s.file_id, s.peer_id, s.direction, s.created_at,
+		       COALESCE(f.name, s.file_id) as file_name,
+		       COALESCE(f.size, 0) as file_size
+		FROM shares s
+		LEFT JOIN files f ON s.file_id = f.id
+		ORDER BY s.created_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ShareInfo
+	for rows.Next() {
+		var si ShareInfo
+		if err := rows.Scan(&si.ID, &si.FileID, &si.PeerID, &si.Direction, &si.CreatedAt, &si.FileName, &si.FileSize); err != nil {
+			return nil, err
+		}
+		out = append(out, si)
+	}
+	return out, rows.Err()
+}
+
+// DeleteFile deletes a file and all its related records from the database.
+// fileID is the hashed key used as the file's ID in the database.
+func (d *DB) DeleteFile(ctx context.Context, fileID string) error {
+	tx, err := d.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Delete from file_keys table
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM file_keys WHERE file_id = ?
+	`, fileID); err != nil {
+		return err
+	}
+
+	// Delete from shares table
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM shares WHERE file_id = ?
+	`, fileID); err != nil {
+		return err
+	}
+
+	// Delete from files table
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM files WHERE id = ?
+	`, fileID); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
