@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -87,6 +88,71 @@ func (d *DB) ListFiles(ctx context.Context) ([]File, error) {
 			return nil, err
 		}
 		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// GetActivePeers returns peers that have been seen recently (within maxAge).
+// This is used for peer discovery/gossip protocol to share known peers with others.
+func (d *DB) GetActivePeers(ctx context.Context, maxAge time.Duration, limit int) ([]Peer, error) {
+	cutoff := time.Now().Add(-maxAge)
+	rows, err := d.sql.QueryContext(ctx, `
+		SELECT id, address, status, last_seen 
+		FROM peers 
+		WHERE last_seen > ?
+		ORDER BY last_seen DESC
+		LIMIT ?
+	`, cutoff, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	
+	var out []Peer
+	for rows.Next() {
+		var p Peer
+		var lastSeenStr string
+		
+		// Scan with last_seen as string first
+		if err := rows.Scan(&p.ID, &p.Address, &p.Status, &lastSeenStr); err != nil {
+			return nil, err
+		}
+		
+		// Parse the timestamp string to time.Time
+		if lastSeenStr != "" {
+			// SQLite stores time.Time as its String() representation, which includes monotonic clock
+			// Format: "2025-12-07 21:16:45.473359503 +0545 +0545 m=+0.014968535"
+			// We need to strip the monotonic clock part (everything from " m=" onwards)
+			
+			// Find and remove the monotonic clock component
+			if idx := strings.Index(lastSeenStr, " m="); idx != -1 {
+				lastSeenStr = lastSeenStr[:idx]
+			}
+			
+			// After stripping monotonic clock: "2025-12-07 21:16:45.473359503 +0545 +0545"
+			// Go's time.String() duplicates timezone - remove the second occurrence
+			// We need to keep only one timezone offset
+			parts := strings.Fields(lastSeenStr) // Split by whitespace
+			if len(parts) >= 3 {
+				// parts = ["2025-12-07", "21:16:45.473359503", "+0545", "+0545"]
+				// Keep only first 3 parts (date, time, first timezone)
+				lastSeenStr = strings.Join(parts[:3], " ")
+			}
+			
+			// Now parse with the standard Go time layout
+			// Format after cleanup: "2025-12-07 21:16:45.473359503 +0545"
+			parsedTime, err := time.Parse("2006-01-02 15:04:05.999999999 -0700", lastSeenStr)
+			if err != nil {
+				// Try without nanoseconds
+				parsedTime, err = time.Parse("2006-01-02 15:04:05 -0700", lastSeenStr)
+				if err != nil {
+					return nil, err
+				}
+			}
+			p.LastSeen = &parsedTime
+		}
+		
+		out = append(out, p)
 	}
 	return out, rows.Err()
 }

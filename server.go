@@ -63,6 +63,8 @@ func (s *FileServer) handleMessage(from string, msg *Message) error {
 		return s.handleMessageGetFile(from, v)
 	case MessageDeleteFile:
 		return s.handleMessageDeleteFile(from, v)
+	case MessagePeerExchange:
+		return s.handleMessagePeerExchange(from, v)
 	}
 	return nil
 }
@@ -403,17 +405,28 @@ func (s *FileServer) OnPeer(p p2p.Peer) error {
 	s.peersLock.Lock()
 	defer s.peersLock.Unlock()
 	s.peers[p.RemoteAddr().String()] = p
-	fmt.Printf("[%s] Connected with remote %s\n", s.Transport.Address(), p.RemoteAddr().String())
+	peerAddr := p.RemoteAddr().String()
+	fmt.Printf("[%s] Connected with remote %s\n", s.Transport.Address(), peerAddr)
 
 	if s.DB != nil {
 		now := time.Now()
 		_ = s.DB.UpsertPeer(context.Background(), dbpkg.Peer{
-			ID:       p.RemoteAddr().String(),
-			Address:  p.RemoteAddr().String(),
+			ID:       peerAddr,
+			Address:  peerAddr,
 			Status:   "connected",
 			LastSeen: &now,
 		})
 	}
+	
+	// Send peer exchange to newly connected peer (after lock is released)
+	go func() {
+		// Small delay to ensure connection is fully established
+		time.Sleep(500 * time.Millisecond)
+		if err := s.sendPeerExchange(peerAddr); err != nil {
+			fmt.Printf("[%s] Error sending peer exchange to %s: %v\n", s.Transport.Address(), peerAddr, err)
+		}
+	}()
+	
 	return nil
 }
 
@@ -455,6 +468,8 @@ func init() {
 	gob.Register(MessageStoreFile{})
 	gob.Register(MessageGetFile{})
 	gob.Register(MessageDeleteFile{})
+	gob.Register(MessagePeerExchange{})
+	gob.Register(PeerInfo{})
 }
 
 type FileServerOpts struct {
@@ -504,4 +519,13 @@ type MessageGetFile struct {
 
 type MessageDeleteFile struct {
 	Key string
+}
+
+type MessagePeerExchange struct {
+	Peers []PeerInfo
+}
+
+type PeerInfo struct {
+	Address  string
+	LastSeen time.Time
 }
