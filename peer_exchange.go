@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/gob"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/TinySkillet/DecentralizedP2PStorage/p2p"
@@ -27,10 +28,10 @@ func (s *FileServer) discoverPeers(peers []PeerInfo) {
 	myAddr := s.Transport.Address()
 	maxAttempts := 10 // Limit to prevent connection storms
 	attempted := 0
+	connected := 0
 	
 	for _, peerInfo := range peers {
 		if attempted >= maxAttempts {
-			fmt.Printf("[%s] Reached max discovery attempts (%d), stopping\n", myAddr, maxAttempts)
 			break
 		}
 		
@@ -45,38 +46,30 @@ func (s *FileServer) discoverPeers(peers []PeerInfo) {
 		s.peersLock.Unlock()
 		
 		if alreadyConnected {
-			fmt.Printf("[%s] Already connected to %s, skipping\n", myAddr, peerInfo.Address)
 			continue
 		}
 		
 		// Attempt connection
-		fmt.Printf("[%s] Attempting to connect to discovered peer %s\n", myAddr, peerInfo.Address)
-		
 		err := s.Transport.Dial(peerInfo.Address)
-		if err != nil {
-			fmt.Printf("[%s] Failed to connect to %s: %v\n", myAddr, peerInfo.Address, err)
-		} else {
-			fmt.Printf("[%s] Successfully connected to discovered peer %s\n", myAddr, peerInfo.Address)
+		if err == nil {
+			fmt.Printf("[%s] Connected to discovered peer %s\n", myAddr, peerInfo.Address)
+			connected++
 			attempted++
-			// Small delay to avoid overwhelming the network
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
 	
-	fmt.Printf("[%s] Peer discovery complete. Connected to %d new peers\n", myAddr, attempted)
+	if connected > 0 {
+		fmt.Printf("[%s] Peer discovery: connected to %d new peer(s)\n", myAddr, connected)
+	}
 }
 
 // sendPeerExchange sends our known peer list to a specific peer.
 func (s *FileServer) sendPeerExchange(peerAddr string) error {
-	fmt.Printf("[%s] DEBUG: sendPeerExchange called for peer %s\n", s.Transport.Address(), peerAddr)
-	
 	// Only send if we have database configured
 	if s.DB == nil {
-		fmt.Printf("[%s] DEBUG: Database is nil, skipping peer exchange\n", s.Transport.Address())
 		return nil
 	}
-	
-	fmt.Printf("[%s] DEBUG: Getting active peers from database...\n", s.Transport.Address())
 	
 	// Get active peers from database (seen in last 30 minutes, max 50 peers)
 	activePeers, err := s.DB.GetActivePeers(context.Background(), 30*time.Minute, 50)
@@ -84,8 +77,6 @@ func (s *FileServer) sendPeerExchange(peerAddr string) error {
 		fmt.Printf("[%s] Error getting active peers: %v\n", s.Transport.Address(), err)
 		return err
 	}
-	
-	fmt.Printf("[%s] DEBUG: Got %d active peers from database\n", s.Transport.Address(), len(activePeers))
 	
 	// Convert to PeerInfo slice
 	peerInfos := make([]PeerInfo, 0, len(activePeers))
@@ -98,7 +89,7 @@ func (s *FileServer) sendPeerExchange(peerAddr string) error {
 		}
 	}
 	
-	fmt.Printf("[%s] Sending peer exchange with %d peers to %s\n", s.Transport.Address(), len(peerInfos), peerAddr)
+	fmt.Printf("[%s] Sending %d peer(s) to %s\n", s.Transport.Address(), len(peerInfos), peerAddr)
 	
 	// Send to specific peer
 	msg := Message{
@@ -123,5 +114,39 @@ func (s *FileServer) sendPeerExchange(peerAddr string) error {
 	}
 	
 	peer.Send([]byte{p2p.IncomingMessage})
-	return peer.Send(buf.Bytes())
+	err = peer.Send(buf.Bytes())
+	
+	// Filter out expected errors from short-lived connections
+	if err != nil && !isExpectedNetworkError(err) {
+		// Only log unexpected errors
+		return err
+	}
+	
+	return nil
+}
+
+// isExpectedNetworkError checks if an error is an expected network condition
+// that doesn't need to be reported (e.g., client disconnected after completing their request)
+func isExpectedNetworkError(err error) bool {
+	if err == nil {
+		return false
+	}
+	
+	errMsg := err.Error()
+	
+	// Expected errors from short-lived connections (store/get/delete commands)
+	expectedErrors := []string{
+		"broken pipe",                    // Client already disconnected
+		"use of closed network connection", // Connection already closed
+		"connection reset by peer",       // Client forcefully closed
+		"EOF",                           // Clean disconnect
+	}
+	
+	for _, expected := range expectedErrors {
+		if strings.Contains(errMsg, expected) {
+			return true
+		}
+	}
+	
+	return false
 }

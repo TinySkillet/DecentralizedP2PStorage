@@ -16,18 +16,41 @@ import (
 
 func setupCommands() *cobra.Command {
 	var (
-		listen    string
-		dbPath    string
-		bootstrap []string
+		dbPath     string
+		listen     string
+		bootstrap  []string
+		configPath string
 	)
 
 	root := &cobra.Command{Use: "p2p", Short: "Decentralized P2P storage node"}
 	root.PersistentFlags().StringVar(&dbPath, "db", "p2p.db", "sqlite database path")
 
+	// Serve command
+	
 	serveCmd := &cobra.Command{
 		Use:   "serve",
-		Short: "Run a node",
+		Short: "Start a P2P storage node",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Load config file if specified
+			if configPath != "" {
+				cfg, err := LoadConfig(configPath)
+				if err != nil {
+					return fmt.Errorf("error loading config: %v", err)
+				}
+				
+				// Apply config values if flags weren't explicitly set
+				if !cmd.Flags().Changed("listen") && cfg.Listen != "" {
+					listen = cfg.Listen
+				}
+				if !cmd.Flags().Changed("db") && cfg.DB != "" {
+					dbPath = cfg.DB
+				}
+				if !cmd.Flags().Changed("bootstrap") && len(cfg.Bootstrap) > 0 {
+					bootstrap = cfg.Bootstrap
+				}
+			}
+			
+			// Original serve logic
 			d, err := dbpkg.Open(dbPath)
 			if err != nil {
 				return err
@@ -47,6 +70,7 @@ func setupCommands() *cobra.Command {
 	}
 	serveCmd.Flags().StringVar(&listen, "listen", ":3000", "listen address")
 	serveCmd.Flags().StringSliceVar(&bootstrap, "bootstrap", nil, "bootstrap nodes")
+	serveCmd.Flags().StringVar(&configPath, "config", "", "config file path (e.g., ~/.p2p/config)")
 	root.AddCommand(serveCmd)
 
 	storeCmd := &cobra.Command{
@@ -250,6 +274,69 @@ func setupCommands() *cobra.Command {
 		},
 	}
 	root.AddCommand(sharesCmd)
+
+	// peers command - list known peers
+	peersCmd := &cobra.Command{
+		Use:   "peers",
+		Short: "List connected and known peers",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			d, err := dbpkg.Open(dbPath)
+			if err != nil {
+				return err
+			}
+			defer d.Close()
+			if err := d.Migrate(context.Background()); err != nil {
+				return err
+			}
+			
+			peers, err := d.GetActivePeers(context.Background(), 24*time.Hour, 100)
+			if err != nil {
+				return err
+			}
+			
+			if len(peers) == 0 {
+				fmt.Println("No peers found.")
+				return nil
+			}
+			
+			fmt.Printf("%-30s\t%-15s\t%s\n", "ADDRESS", "STATUS", "LAST SEEN")
+			fmt.Println(strings.Repeat("-", 70))
+			for _, p := range peers {
+				lastSeen := "never"
+				if p.LastSeen != nil {
+					lastSeen = p.LastSeen.Format("2006-01-02 15:04:05")
+				}
+				fmt.Printf("%-30s\t%-15s\t%s\n", p.Address, p.Status, lastSeen)
+			}
+			return nil
+		},
+	}
+	root.AddCommand(peersCmd)
+
+	// cleanup command - remove stale peers
+	cleanupCmd := &cobra.Command{
+		Use:   "cleanup",
+		Short: "Remove stale peer records from database",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			d, err := dbpkg.Open(dbPath)
+			if err != nil{
+				return err
+			}
+			defer d.Close()
+			if err := d.Migrate(context.Background()); err != nil {
+				return err
+			}
+			
+			removed, err := d.CleanupStalePeers(context.Background(), 1*time.Hour)
+			if err != nil {
+				return err
+			}
+			
+			fmt.Printf("Removed %d stale peer(s)\n", removed)
+			return nil
+		},
+	}
+	root.AddCommand(cleanupCmd)
 
 	// demo: preserves old behavior behind a command
 	demoCmd := &cobra.Command{

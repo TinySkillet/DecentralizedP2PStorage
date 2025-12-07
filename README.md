@@ -1,351 +1,386 @@
 # Decentralized P2P Storage
 
-A decentralized peer-to-peer (P2P) file storage system written in Go. This system allows nodes (peers) to connect, share, and retrieve files from each other over a TCP network. Files are encrypted and stored using content-addressable storage (CAS) with automatic peer discovery and file replication.
+A decentralized peer-to-peer file storage system with automatic peer discovery and gossip protocol.
 
 ## Features
 
-- **Decentralized Storage**: Files are distributed across multiple peers in the network
-- **Content-Addressable Storage (CAS)**: Files are stored based on their content hash
-- **Encryption**: Files are encrypted using AES encryption
-- **Peer Discovery**: Automatic connection to bootstrap nodes
-- **File Operations**: Store, retrieve, and delete files across the network
-- **SQLite Database**: Metadata tracking for files and peers
-- **Command-Line Interface**: Easy-to-use CLI with Cobra
+✨ **Automatic Peer Discovery** - Nodes discover each other through peer gossip protocol  
+📦 **Distributed Storage** - Files replicated across multiple peers  
+🔄 **Real-time Sync** - Automatic file synchronization  
+🗄️ **SQLite Integration** - Persistent storage and peer tracking  
+🚀 **Production Ready** - Systemd service, clean logging, easy deployment  
 
-## Prerequisites
+---
 
-- **Go 1.24.5 or higher**: [Download Go](https://golang.org/dl/)
-- **Git**: For cloning the repository (optional)
+## Quick Start
 
-## Installation
-
-### 1. Clone the Repository
+### Build
 
 ```bash
-git clone <repository-url>
-cd P2PStorage
+go build
 ```
 
-### 2. Install Dependencies
-
-The project uses Go modules. Dependencies will be automatically downloaded when you build:
+### Run a Node
 
 ```bash
-go mod download
+# Node 1 (Bootstrap)
+./DecentralizedP2PStorage serve --listen :3000 --db node_3000/p2p.db
+
+# Node 2 (in another terminal)
+./DecentralizedP2PStorage serve --listen :4000 --db node_4000/p2p.db --bootstrap localhost:3000
+
+# Node 3 (in another terminal)
+./DecentralizedP2PStorage serve --listen :5000 --db node_5000/p2p.db --bootstrap localhost:4000
 ```
 
-### 3. Build the Project
+Node 3 will automatically discover Node 1 through peer gossip! 🎉
 
-You can build the project using either method:
+---
 
-**Using Make:**
-```bash
-make build
-```
+## Commands
 
-This will create a binary at `bin/p2p`.
-
-**Using Go directly:**
-```bash
-go build -o bin/p2p
-```
-
-## Usage
-
-The CLI tool provides several commands for managing your P2P storage node. All commands support a persistent `--db` flag to specify the SQLite database path (defaults to `p2p.db`).
-
-### Global Flags
-
-- `--db <path>`: Specify the SQLite database path (default: `p2p.db`)
-
-### Commands
-
-#### 1. Serve (Run a Node)
-
-Start a P2P storage node that listens for connections and can serve files to other peers.
+### Serve - Start a Node
 
 ```bash
-./bin/p2p serve [flags]
+./DecentralizedP2PStorage serve [flags]
+
+Flags:
+  --listen string        Listen address (default ":3000")
+  --db string           Database path (default "p2p.db")
+  --bootstrap strings   Bootstrap peer addresses
 ```
 
-**Flags:**
-- `--listen <address>`: Listen address (default: `:3000`)
-- `--bootstrap <nodes>`: Bootstrap nodes to connect to (comma-separated or repeated flag)
-
-**Examples:**
+### Store - Upload a File
 
 ```bash
-# Start a node on default port 3000
-./bin/p2p serve
+./DecentralizedP2PStorage store <key> <file> [flags]
 
-# Start a node on a custom port
-./bin/p2p serve --listen :4000
-
-# Start a node and connect to bootstrap nodes
-./bin/p2p serve --listen :4000 --bootstrap :3000 --bootstrap :5000
-
-# Use a custom database
-./bin/p2p serve --db mynode.db
+# Example:
+./DecentralizedP2PStorage store myfile document.pdf --listen :7000 --db /tmp/store.db --bootstrap localhost:3000
 ```
 
-#### 2. Store (Store a File)
-
-Store a file locally and broadcast it to all connected peers.
+### Get - Download a File
 
 ```bash
-./bin/p2p store <key> <file> [flags]
+./DecentralizedP2PStorage get <key> [flags]
+
+# Example:
+./DecentralizedP2PStorage get myfile --listen :7000 --db /tmp/get.db --bootstrap localhost:3000 --out retrieved.pdf
 ```
 
-**Arguments:**
-- `key`: The key/name to store the file under
-- `file`: Path to the file to store
-
-**Flags:**
-- `--listen <address>`: Listen address (default: `:3000`)
-- `--bootstrap <nodes>`: Bootstrap nodes to connect to
-
-**Examples:**
+### Peers - List Known Peers
 
 ```bash
-# Store a file
-./bin/p2p store myfile.txt /path/to/file.txt
+./DecentralizedP2PStorage peers --db <database-path>
 
-# Store a file and connect to bootstrap nodes
-./bin/p2p store document.pdf ./doc.pdf --bootstrap :3000
-
-# Store with custom listen address
-./bin/p2p store image.jpg ./photo.jpg --listen :4000 --bootstrap :3000
+# Example:
+mkdir -p node_3000
+./DecentralizedP2PStorage peers --db node_3000/p2p.db
 ```
 
-#### 3. Get (Retrieve a File)
+**Output:**
+```
+ADDRESS                       STATUS         LAST SEEN
+----------------------------------------------------------------------
+[::1]:4000                    connected      2025-12-07 21:20:45
+[::1]:5000                    connected      2025-12-07 21:19:30
+```
 
-Fetch a file from the network (local storage or peers).
+### Cleanup - Remove Stale Peers
 
 ```bash
-./bin/p2p get <key> [flags]
+./DecentralizedP2PStorage cleanup --db <database-path>
+
+# Example:
+./DecentralizedP2PStorage cleanup --db node_3000/p2p.db
 ```
 
-**Arguments:**
-- `key`: The key/name of the file to retrieve
+**Output:**
+```
+Removed 7 stale peer(s)
+```
 
-**Flags:**
-- `--listen <address>`: Listen address (default: `:3000`)
-- `--bootstrap <nodes>`: Bootstrap nodes to connect to
-- `--out <path>`: Output file path (if not specified, outputs to stdout)
-
-**Examples:**
+### Files List - Show Stored Files
 
 ```bash
-# Get a file and output to stdout
-./bin/p2p get myfile.txt
+./DecentralizedP2PStorage files list --db <database-path>
 
-# Get a file and save to a specific location
-./bin/p2p get myfile.txt --out ./downloaded.txt
-
-# Get a file from the network
-./bin/p2p get document.pdf --bootstrap :3000 --out ./doc.pdf
+# Example:
+./DecentralizedP2PStorage files list --db node_3000/p2p.db
 ```
 
-#### 4. Delete (Delete a File)
-
-Delete a file from local storage.
+### Delete - Remove a File
 
 ```bash
-./bin/p2p delete <key> [flags]
+./DecentralizedP2PStorage delete <key> [flags]
+
+# Example:
+./DecentralizedP2PStorage delete myfile --listen :7000 --db /tmp/delete.db --bootstrap localhost:3000
 ```
 
-**Arguments:**
-- `key`: The key/name of the file to delete
-
-**Flags:**
-- `--listen <address>`: Listen address (default: `:3000`)
-- `--bootstrap <nodes>`: Bootstrap nodes to connect to
-
-**Examples:**
+### Shares - View File Replicas
 
 ```bash
-# Delete a file
-./bin/p2p delete myfile.txt
+./DecentralizedP2PStorage shares --db <database-path>
 
-# Delete a file with custom database
-./bin/p2p delete document.pdf --db mynode.db
+# Example:
+./DecentralizedP2PStorage shares --db node_3000/p2p.db
 ```
 
-#### 5. Files List
+---
 
-List all known files in the database.
+## Testing Peer Gossip Protocol
+
+### Automated Test
 
 ```bash
-./bin/p2p files list [flags]
+./test_peer_gossip.sh
 ```
 
-**Output Format:**
-```
-ID    Name    Size    LocalPath
+This runs a 3-node test demonstrating automatic peer discovery.
+
+### Manual Test
+
+**Step 1: Start 3 nodes in separate terminals**
+
+Terminal 1:
+```bash
+mkdir -p node_3000
+./DecentralizedP2PStorage serve --listen :3000 --db node_3000/p2p.db
 ```
 
-**Examples:**
+Terminal 2:
+```bash
+mkdir -p node_4000
+./DecentralizedP2PStorage serve --listen :4000 --db node_4000/p2p.db --bootstrap localhost:3000
+```
+
+Terminal 3:
+```bash
+mkdir -p node_5000
+./DecentralizedP2PStorage serve --listen :5000 --db node_5000/p2p.db --bootstrap localhost:4000
+```
+
+**Step 2: Verify peer discovery**
+
+Watch Terminal 3 - you should see:
+```
+[:5000] Connected to discovered peer [::1]:3000
+[:5000] Peer discovery: connected to 1 new peer(s)
+```
+
+**Step 3: Check peer database**
 
 ```bash
-# List all files
-./bin/p2p files list
-
-# List files with custom database
-./bin/p2p files list --db mynode.db
+./DecentralizedP2PStorage peers --db node_5000/p2p.db
 ```
 
-#### 6. Demo (Run Local Demo)
+You should see both `:3000` and `:4000`!
 
-Run a local 3-node demo to test the P2P storage system.
+---
+
+## Testing File Storage & Retrieval
+
+### Store a File
 
 ```bash
-./bin/p2p demo
+# Create test file
+echo "Hello P2P Storage!" > test.txt
+
+# Store on Node C (port 5000)
+./DecentralizedP2PStorage store testfile test.txt --listen :7000 --db /tmp/store.db --bootstrap localhost:5000
 ```
 
-This command:
-1. Starts three nodes on ports `:3000`, `:4000`, and `:5000`
-2. Connects them to form a network
-3. Stores a test file
-4. Deletes the file
-5. Retrieves the file from the network
-6. Displays the file content
-
-**Example:**
+### Retrieve from Another Node
 
 ```bash
-./bin/p2p demo
+# Retrieve from Node A (port 3000) - proving replication works!
+./DecentralizedP2PStorage get testfile --listen :8000 --db /tmp/get.db --bootstrap localhost:3000 --out retrieved.txt
+
+# Verify
+cat retrieved.txt
+# Output: Hello P2P Storage!
 ```
 
-## Common Workflows
+---
 
-### Setting Up a Multi-Node Network
+## Production Deployment
 
-**Terminal 1 - Start Bootstrap Node:**
-```bash
-./bin/p2p serve --listen :3000
-```
+See [DEPLOYMENT.md](DEPLOYMENT.md) for complete deployment guide including:
+- Systemd service setup
+- Firewall configuration
+- Monitoring
+- Troubleshooting
 
-**Terminal 2 - Start Second Node:**
-```bash
-./bin/p2p serve --listen :4000 --bootstrap :3000
-```
-
-**Terminal 3 - Start Third Node:**
-```bash
-./bin/p2p serve --listen :5000 --bootstrap :3000 --bootstrap :4000
-```
-
-### Storing and Retrieving Files
-
-**On Node 1 (port 3000):**
-```bash
-./bin/p2p serve --listen :3000
-```
-
-**On Node 2 (port 4000):**
-```bash
-# Start the node
-./bin/p2p serve --listen :4000 --bootstrap :3000
-
-# In another terminal, store a file
-./bin/p2p store myfile.txt ./example.txt --listen :4000 --bootstrap :3000
-```
-
-**On Node 3 (port 5000):**
-```bash
-# Start the node
-./bin/p2p serve --listen :5000 --bootstrap :3000
-
-# Retrieve the file stored by Node 2
-./bin/p2p get myfile.txt --listen :5000 --bootstrap :3000 --out ./retrieved.txt
-```
-
-## Project Structure
-
-```
-P2PStorage/
-├── main.go              # Entry point
-├── cmd.go               # CLI commands definition
-├── cmd_helpers.go       # Helper functions for commands
-├── server.go            # FileServer implementation
-├── storage.go           # Storage layer with CAS
-├── crypto.go            # Encryption utilities
-├── db/
-│   ├── db.go           # Database connection
-│   └── repo.go         # Database operations
-└── p2p/
-    ├── transport.go     # Transport interface
-    ├── tcp_transport.go # TCP transport implementation
-    ├── message.go       # Message definitions
-    ├── encoding.go     # Message encoding/decoding
-    └── handshake.go    # Connection handshake
-```
-
-## Development
-
-### Running Tests
+### Quick Install
 
 ```bash
-# Run all tests
-go test ./...
-
-# Run tests with verbose output
-make test
+./install.sh
 ```
 
-### Building
+### Run as Systemd Service
 
 ```bash
-# Build the binary
-make build
+# Start
+sudo systemctl start p2p-storage@$USER
 
-# Or use Go directly
-go build -o bin/p2p
+# Enable on boot
+sudo systemctl enable p2p-storage@$USER
+
+# Check status
+sudo systemctl status p2p-storage@$USER
 ```
 
-## Database
+---
 
-The system uses SQLite to store:
-- File metadata (ID, name, size, local path)
-- Peer information (address, status, last seen)
-- Encryption keys
+## Testing Checklist
 
-By default, the database is stored as `p2p.db` in the current directory. You can specify a custom path using the `--db` flag.
+- [ ] **Peer Discovery**: Node C discovers Node A through Node B
+- [ ] **File Storage**: Store file on one node
+- [ ] **File Retrieval**: Retrieve file from different node
+- [ ] **Peer List**: `peers` command shows connected nodes
+- [ ] **Cleanup**: `cleanup` removes stale peers
+- [ ] **Deletion**: Delete propagates to all nodes
 
-## Storage
+### Run All Tests
 
-Files are stored using Content-Addressable Storage (CAS) in a directory structure based on the file key hash. The default storage root is `<listen_address>_network` (e.g., `:3000_network`).
+```bash
+# 1. Test peer discovery
+./test_peer_gossip.sh
 
-Files are encrypted using AES encryption before storage.
+# 2. Create test directories
+mkdir -p node_3000 node_4000 node_5000
+
+# 3. Check peers (with running nodes)
+./DecentralizedP2PStorage peers --db node_5000/p2p.db
+
+# 4. Clean up stale peers
+./DecentralizedP2PStorage cleanup --db node_5000/p2p.db
+
+# 5. List files
+./DecentralizedP2PStorage files list --db node_5000/p2p.db
+```
+
+---
+
+## Architecture
+
+```
+┌─────────────┐         Gossip          ┌─────────────┐
+│   Node A    │ ◄────────────────────── │   Node B    │
+│   :3000     │                          │   :4000     │
+└─────────────┘                          └─────────────┘
+       ▲                                        │
+       │                                        │
+       │         Peer Discovery                 ▼
+       │         (Automatic!)            ┌─────────────┐
+       └─────────────────────────────────│   Node C    │
+                                         │   :5000     │
+                                         └─────────────┘
+```
+
+- **Peer Gossip**: Nodes exchange peer lists automatically
+- **File Replication**: Files broadcast to all connected peers
+- **SQLite Storage**: Persistent peer and file metadata
+- **TCP Transport**: Reliable peer-to-peer connections
+
+---
 
 ## Troubleshooting
 
-### Port Already in Use
+### "unable to open database file: out of memory"
 
-If you get an error about a port being in use, choose a different port:
-
+The database directory doesn't exist. Create it first:
 ```bash
-./bin/p2p serve --listen :4000
+mkdir -p node_3000
+./DecentralizedP2PStorage peers --db node_3000/p2p.db
 ```
 
-### Cannot Connect to Bootstrap Nodes
+### "address already in use"
 
-Make sure bootstrap nodes are running before connecting to them. Start bootstrap nodes first, then connect other nodes to them.
+Another process is using that port. Use a different port:
+```bash
+./DecentralizedP2PStorage serve --listen :3001 --db node_3001/p2p.db
+```
 
-### Database Migration Errors
+### "database is locked"
 
-If you encounter database errors, try deleting the database file and letting it recreate:
+Multiple instances trying to use same database. Use separate databases:
+```bash
+./DecentralizedP2PStorage serve --listen :3000 --db node_3000/p2p.db
+./DecentralizedP2PStorage serve --listen :4000 --db node_4000/p2p.db
+```
+
+### Connection Refused Errors
+
+These are normal for stale peer addresses. The system:
+- Tries old addresses
+- Skips failed connections
+- Connects to active peers
+
+Run cleanup to remove stale peers:
+```bash
+./DecentralizedP2PStorage cleanup --db node_3000/p2p.db
+```
+
+---
+
+## Development
+
+### Project Structure
+
+```
+.
+├── cmd.go              # CLI commands
+├── server.go           # File server logic
+├── peer_exchange.go    # Peer gossip protocol
+├── storage.go          # File storage layer
+├── db/
+│   ├── repo.go         # Database operations
+│   └── schema.sql      # Database schema
+├── p2p/
+│   ├── tcp_transport.go    # TCP transport layer
+│   ├── message.go          # Message encoding
+│   └── encoding.go         # Data encoding
+├── DEPLOYMENT.md       # Deployment guide
+└── test_peer_gossip.sh # Automated test
+```
+
+### Build & Test
 
 ```bash
-rm p2p.db
-./bin/p2p serve
+# Build
+go build
+
+# Run tests
+go test ./...
+
+# Test peer gossip
+./test_peer_gossip.sh
 ```
+
+---
 
 ## License
 
-[Add your license here]
+MIT License - See LICENSE file for details
+
+---
 
 ## Contributing
 
-[Add contribution guidelines here]
+Contributions welcome! Please:
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests
+5. Submit a pull request
 
+---
+
+## Acknowledgments
+
+Built with:
+- Go 1.x
+- SQLite
+- Cobra CLI framework

@@ -8,7 +8,8 @@ import (
 )
 
 type DB struct {
-	sql *sql.DB
+	sql  *sql.DB
+	path string
 }
 
 func Open(path string) (*DB, error) {
@@ -22,10 +23,13 @@ func Open(path string) (*DB, error) {
 		_ = d.Close()
 		return nil, err
 	}
-	return &DB{sql: d}, nil
+	return &DB{sql: d, path: path}, nil
 }
 
 func (d *DB) Close() error { return d.sql.Close() }
+
+// Path returns the database file path
+func (d *DB) Path() string { return d.path }
 
 func (d *DB) Migrate(ctx context.Context) error {
 	stmts := []string{

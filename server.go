@@ -423,6 +423,7 @@ func (s *FileServer) OnPeer(p p2p.Peer) error {
 		// Small delay to ensure connection is fully established
 		time.Sleep(500 * time.Millisecond)
 		if err := s.sendPeerExchange(peerAddr); err != nil {
+			// Only log unexpected errors (filtering done in sendPeerExchange)
 			fmt.Printf("[%s] Error sending peer exchange to %s: %v\n", s.Transport.Address(), peerAddr, err)
 		}
 	}()
