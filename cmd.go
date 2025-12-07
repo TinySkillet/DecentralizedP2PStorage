@@ -270,7 +270,7 @@ func setupCommands() *cobra.Command {
 			key := "coolpicture.jpg"
 			data := bytes.NewReader([]byte("my big data file here!"))
 			_ = s3.Store(key, data)
-			_ = s3.store.Delete(key)
+			_ = s3.Delete(key)
 			_, r, err := s3.Get(key)
 			if err != nil {
 				return err

@@ -156,10 +156,13 @@ func (s *FileServer) handleMessageDeleteFile(from string, msg MessageDeleteFile)
 	}
 
 	// Delete from database if configured
+	// Note: For peer messages, we log warnings but continue with file deletion
+	// to honor the delete request, even if DB cleanup fails
+	dbDeleteFailed := false
 	if s.DB != nil {
 		if err := s.DB.DeleteFile(context.Background(), msg.Key); err != nil {
-			// Log error but continue with deletion
-			fmt.Printf("[%s] Warning: error deleting file with hash '%s' from database: %v\n", s.Transport.Address(), msg.Key, err)
+			fmt.Printf("[%s] WARNING: Failed to delete file with hash '%s' from database: %v. Continuing with file deletion - DATABASE INCONSISTENCY DETECTED\n", s.Transport.Address(), msg.Key, err)
+			dbDeleteFailed = true
 		} else {
 			fmt.Printf("[%s] Deleted file with hash '%s' from database\n", s.Transport.Address(), msg.Key)
 		}
@@ -187,6 +190,10 @@ func (s *FileServer) handleMessageDeleteFile(from string, msg MessageDeleteFile)
 	}
 
 	fmt.Printf("[%s] File with hash '%s' does not exist locally, skipping deletion\n", s.Transport.Address(), msg.Key)
+	
+	if dbDeleteFailed {
+		fmt.Printf("[%s] WARNING: Database inconsistency - file deleted from disk but database cleanup failed for hash '%s'\n", s.Transport.Address(), msg.Key)
+	}
 	return nil
 }
 
@@ -339,11 +346,10 @@ func (s *FileServer) Delete(key string) error {
 	if s.DB != nil {
 		fileID := hashKey(key)
 		if err := s.DB.DeleteFile(context.Background(), fileID); err != nil {
-			// Log error but continue with deletion
-			fmt.Printf("[%s] Warning: error deleting file '%s' from database: %v\n", s.Transport.Address(), key, err)
-		} else {
-			fmt.Printf("[%s] Deleted file '%s' from database\n", s.Transport.Address(), key)
+			// Fail fast to maintain consistency: if DB delete fails, don't delete the file
+			return fmt.Errorf("[%s] Failed to delete file '%s' from database: %v. File not deleted from disk to maintain consistency", s.Transport.Address(), key, err)
 		}
+		fmt.Printf("[%s] Deleted file '%s' from database\n", s.Transport.Address(), key)
 	}
 
 	// Delete locally first

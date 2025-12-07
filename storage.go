@@ -63,16 +63,15 @@ func (s *Store) writeStream(key string, r io.Reader) (int64, error) {
 func (s *Store) Delete(key string) error {
 	pathKey := s.PathTransformFunc(key)
 
-	defer func() {
-		log.Printf("Deleted [%s] from disk\n", pathKey.Filename)
-	}()
-
 	parentDir := strings.Split(pathKey.FullPath(), "/")[0]
 
 	parentDirWRoot := fmt.Sprintf("%s/%s", s.Root, parentDir)
 	if err := os.RemoveAll(parentDirWRoot); err != nil {
+		log.Printf("Failed to delete [%s] from disk: %v\n", pathKey.Filename, err)
 		return err
 	}
+	
+	log.Printf("Deleted [%s] from disk\n", pathKey.Filename)
 	return nil
 }
 
