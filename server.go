@@ -39,6 +39,13 @@ func (s *FileServer) loop() {
 	for {
 		select {
 		case rpc := <-s.Transport.Consume():
+			if rpc.Stream {
+				if err := s.handleStream(rpc.From); err != nil {
+					log.Printf("[%s] Error handling stream: %v", s.Transport.Address(), err)
+				}
+				continue
+			}
+
 			var msg Message
 			err := gob.NewDecoder(bytes.NewReader(rpc.Payload)).Decode(&msg)
 			if err != nil {
@@ -70,49 +77,129 @@ func (s *FileServer) handleMessage(from string, msg *Message) error {
 }
 
 func (s *FileServer) handleMessageStoreFile(from string, msg MessageStoreFile) error {
-	peer, found := s.peers[from]
-	if !found {
-		return fmt.Errorf("peer (%s) could not be found in the peers list", from)
-	}
-
-	n, err := s.store.Write(msg.Key, io.LimitReader(peer, msg.Size))
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("[%s] Written %d bytes to disk\n", s.Transport.Address(), n)
-
-	// Record share in database if configured
-	if s.DB != nil {
-		shareID := hashKey(msg.Key + from + "incoming")
-		_ = s.DB.InsertShare(context.Background(), dbpkg.Share{
-			ID:        shareID,
-			FileID:    msg.Key,
-			PeerID:    from,
-			Direction: "incoming",
-		})
-	}
-
-	peer.CloseStream()
+	fmt.Printf("[%s] Received StoreFile message from %s for key %s. Expecting stream...\n", s.Transport.Address(), from, msg.Key)
+	s.pendingFileTransfers[from] = msg
 	return nil
+}
+
+func (s *FileServer) handleStream(from string) error {
+	// Check for pending upload (StoreFile)
+	if msg, ok := s.pendingFileTransfers[from]; ok {
+		delete(s.pendingFileTransfers, from)
+
+		peer, found := s.peers[from]
+		if !found {
+			return fmt.Errorf("peer (%s) could not be found in the peers list", from)
+		}
+
+		// Receive plaintext, write encrypted
+		n, err := s.store.WriteEncrypt(s.EncryptionKey, msg.Key, io.LimitReader(peer, msg.Size))
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("[%s] Written %d bytes to disk (encrypted) from %s\n", s.Transport.Address(), n, from)
+
+		// Record share in database if configured
+		if s.DB != nil {
+			shareID := hashKey(msg.Key + from + "incoming")
+			_ = s.DB.InsertShare(context.Background(), dbpkg.Share{
+				ID:        shareID,
+				FileID:    msg.Key,
+				PeerID:    from,
+				Direction: "incoming",
+			})
+		}
+
+		peer.CloseStream()
+
+		// Signal download completion if anyone is waiting
+		if ch, ok := s.downloadChannels[msg.Key]; ok {
+			close(ch)
+			delete(s.downloadChannels, msg.Key)
+		}
+
+		return nil
+	}
+
+	// Check for pending download (GetFile)
+	// We need to know WHICH file is being downloaded.
+	// But handleStream only knows 'from'.
+	// We need a map[from]chan struct{} for downloads too?
+	// Or map[from]expectedKey?
+
+	// Since Get is synchronous, we can assume only one download per peer at a time?
+	// Or we can use pendingDownloads map[string]chan struct{} where key is... peer?
+	// But Get broadcasts to ALL peers.
+	// Any peer might respond.
+
+	// If we use pendingDownloads map[string]chan struct{} where key is fileKey (hash).
+	// But handleStream doesn't know fileKey!
+
+	// Wait, if we use MessageStoreFile for downloads too (as planned),
+	// then the responder sends MessageStoreFile FIRST.
+	// So it ends up in pendingFileTransfers!
+	// So the logic above handles it automatically!
+
+	// The only difference is that for Get, we might want to signal the Get caller.
+	// But Get caller can just check if file exists?
+	// Or we can have a separate notification mechanism.
+
+	// If Get caller waits for file to exist, we are good.
+
+	return fmt.Errorf("peer %s sent a stream but no pending transfer was found", from)
 }
 
 func (s *FileServer) handleMessageGetFile(from string, msg MessageGetFile) error {
 	fmt.Printf("[%s] Received request to serve file '%s'\n", s.Transport.Address(), msg.Key)
 
-	if !s.store.Has(msg.Key) {
-		return fmt.Errorf("[%s] Received request to serve file %s but it does not exist on disk", s.Transport.Address(), msg.Key)
+	// Try to find the file.
+	// It could be stored with original key (if we are uploader) or hashed key (if we are peer).
+
+	keyToRead := msg.Key
+
+	if s.DB != nil {
+		// Check if we have the original key mapping
+		// We need a way to look up file by hash.
+		// ListFiles is inefficient but works for now.
+		// Ideally we should have GetFileByHash.
+		files, err := s.DB.ListFiles(context.Background())
+		if err == nil {
+			for _, f := range files {
+				if f.Hash == msg.Key {
+					fmt.Printf("[%s] Found original key '%s' for hash '%s'\n", s.Transport.Address(), f.Name, msg.Key)
+					keyToRead = f.Name
+					break
+				}
+			}
+		}
 	}
 
-	fmt.Printf("[%s] Serving file '%s' over the network\n", s.Transport.Address(), msg.Key)
+	// Read from disk (Encrypted) -> Decrypt -> Send Plaintext
+	// We use ReadDecrypt to get plaintext reader
 
-	size, r, err := s.store.Read(msg.Key)
+	// Use s.store.Read which is public
+	encSize, r, err := s.store.Read(keyToRead)
+	if err != nil {
+		// If failed with original key (or default hashed key), try the other one?
+		// If we switched to original key, maybe we should fallback?
+		// But if DB says we have it, we should have it.
+		return fmt.Errorf("[%s] Failed to read file %s: %v", s.Transport.Address(), keyToRead, err)
+	}
+	if rc, ok := r.(io.ReadCloser); ok {
+		rc.Close()
+	}
+
+	// Note: ReadDecrypt returns 0 size because it's a stream.
+	// We need to know the size to send MessageStoreFile.
+	// We can get encrypted size from DB or disk, and subtract 16.
+
+	plaintextSize := encSize - 16
+
+	// Now open decrypt stream
+	_, fileReader, err := s.store.ReadDecrypt(s.EncryptionKey, keyToRead)
 	if err != nil {
 		return err
-	}
-
-	if rc, ok := r.(io.ReadCloser); ok {
-		defer rc.Close()
 	}
 
 	peer, ok := s.peers[from]
@@ -120,18 +207,36 @@ func (s *FileServer) handleMessageGetFile(from string, msg MessageGetFile) error
 		return fmt.Errorf("peer %s not found in peer list", from)
 	}
 
+	// Send MessageStoreFile first (acting as uploader)
+	storeMsg := Message{
+		Payload: MessageStoreFile{
+			Key:  msg.Key,
+			Size: plaintextSize,
+		},
+	}
+
+	buf := new(bytes.Buffer)
+	if err := gob.NewEncoder(buf).Encode(&storeMsg); err != nil {
+		return err
+	}
+
+	peer.Send([]byte{p2p.IncomingMessage})
+	binary.Write(peer, binary.LittleEndian, int64(buf.Len()))
+	if err := peer.Send(buf.Bytes()); err != nil {
+		return err
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
 	// send the 'IncomingStream' byte to the peer first
 	peer.Send([]byte{p2p.IncomingStream})
 
-	// then we can send the file size
-	binary.Write(peer, binary.LittleEndian, size)
-
-	n, err := io.Copy(peer, r)
+	n, err := io.Copy(peer, fileReader)
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("[%s] Written %d bytes over the network to %s\n", s.Transport.Address(), n, from)
+	fmt.Printf("[%s] Written %d bytes (plaintext) over the network to %s\n", s.Transport.Address(), n, from)
 	return nil
 }
 
@@ -192,7 +297,7 @@ func (s *FileServer) handleMessageDeleteFile(from string, msg MessageDeleteFile)
 	}
 
 	fmt.Printf("[%s] File with hash '%s' does not exist locally, skipping deletion\n", s.Transport.Address(), msg.Key)
-	
+
 	if dbDeleteFailed {
 		fmt.Printf("[%s] WARNING: Database inconsistency - file deleted from disk but database cleanup failed for hash '%s'\n", s.Transport.Address(), msg.Key)
 	}
@@ -224,6 +329,7 @@ func (s *FileServer) broadcast(msg *Message) error {
 	for addr, peer := range s.peers {
 		fmt.Printf("[%s] Sending message to peer %s\n", s.Transport.Address(), addr)
 		peer.Send([]byte{p2p.IncomingMessage})
+		binary.Write(peer, binary.LittleEndian, int64(buf.Len()))
 		if err := peer.Send(buf.Bytes()); err != nil {
 			fmt.Printf("[%s] Error sending message to peer %s: %v\n", s.Transport.Address(), addr, err)
 			return err
@@ -236,52 +342,48 @@ func (s *FileServer) broadcast(msg *Message) error {
 func (s *FileServer) Get(key string) (int64, io.Reader, error) {
 	if s.store.Has(key) {
 		fmt.Printf("[%s] File '%s' found locally! Serving file from disk...\n", s.Transport.Address(), key)
-		return s.store.Read(key)
+		return s.store.ReadDecrypt(s.EncryptionKey, key)
 	}
 
 	fmt.Printf("[%s] Did not find file '%s' locally, searching on network...\n", s.Transport.Address(), key)
 
+	// Create channel to wait for download
+	hash := hashKey(key)
+	ch := make(chan struct{})
+	s.downloadChannels[hash] = ch
+
 	msg := Message{
 		Payload: MessageGetFile{
-			Key: hashKey(key),
+			Key: hash,
 		},
 	}
 
 	if err := s.broadcast(&msg); err != nil {
+		delete(s.downloadChannels, hash)
 		return 0, nil, err
 	}
 
-	time.Sleep(time.Millisecond * 500)
-
-	for _, peer := range s.peers {
-		// first read the file size so we can limit the amt of bytes
-		// that we read from the connection, so it will not keep hanging
-
-		var fileSize int64
-		binary.Read(peer, binary.LittleEndian, &fileSize)
-
-		n, err := s.store.WriteDecrypt(s.EncryptionKey, key, io.LimitReader(peer, fileSize))
-		if err != nil {
-			return 0, nil, err
-		}
-
-		fmt.Printf("[%s] Received %d bytes over the network from [%s]\n", s.Transport.Address(), n, peer.RemoteAddr())
-		peer.CloseStream()
+	// Wait for download to complete or timeout
+	select {
+	case <-ch:
+		fmt.Printf("[%s] File downloaded successfully!\n", s.Transport.Address())
+		// The file was downloaded and stored using the hash
+		return s.store.ReadDecrypt(s.EncryptionKey, hash)
+	case <-time.After(10 * time.Second):
+		delete(s.downloadChannels, hash)
+		return 0, nil, fmt.Errorf("timeout waiting for file download")
 	}
-
-	return s.store.Read(key)
-
 }
 
 func (s *FileServer) Store(key string, r io.Reader) error {
 
-	fileBuf := new(bytes.Buffer)
-	tee := io.TeeReader(r, fileBuf)
-
-	size, err := s.store.Write(key, tee)
+	// 1. Write Encrypted to disk.
+	n, err := s.store.WriteEncrypt(s.EncryptionKey, key, r)
 	if err != nil {
 		return err
 	}
+
+	plaintextSize := n - 16
 
 	// Record file metadata if DB is configured
 	if s.DB != nil {
@@ -289,37 +391,58 @@ func (s *FileServer) Store(key string, r io.Reader) error {
 			ID:        hashKey(key),
 			Name:      key,
 			Hash:      hashKey(key),
-			Size:      size,
+			Size:      plaintextSize,
 			LocalPath: s.store.FullPathForKey(key),
 		}, "default")
 	}
 
-	msg := Message{
-		Payload: MessageStoreFile{
-			Key:  hashKey(key),
-			Size: size + 16, // IV which is 16 bytes is prepended
-		},
-	}
-
-	if err := s.broadcast(&msg); err != nil {
-		return err
-	}
-
-	time.Sleep(500 * time.Millisecond)
-
+	// Capture peers
+	s.peersLock.Lock()
 	peers := []io.Writer{}
 	peerAddrs := []string{}
-
-	s.peersLock.Lock()
 	for addr, peer := range s.peers {
 		peers = append(peers, peer)
 		peerAddrs = append(peerAddrs, addr)
 	}
 	s.peersLock.Unlock()
 
+	msg := Message{
+		Payload: MessageStoreFile{
+			Key:  hashKey(key),
+			Size: plaintextSize,
+		},
+	}
+
+	// Broadcast to captured peers
+	buf := new(bytes.Buffer)
+	if err := gob.NewEncoder(buf).Encode(&msg); err != nil {
+		return err
+	}
+
+	for i, peer := range peers {
+		addr := peerAddrs[i]
+		fmt.Printf("[%s] Sending message to peer %s\n", s.Transport.Address(), addr)
+		if p, ok := peer.(p2p.Peer); ok {
+			p.Send([]byte{p2p.IncomingMessage})
+			binary.Write(p, binary.LittleEndian, int64(buf.Len()))
+			if err := p.Send(buf.Bytes()); err != nil {
+				fmt.Printf("[%s] Error sending message to peer %s: %v\n", s.Transport.Address(), addr, err)
+			}
+		}
+	}
+
+	// 3. Stream Plaintext to peers.
+	// Read from disk (Encrypted) -> Decrypt -> Send.
+	_, fileReader, err := s.store.ReadDecrypt(s.EncryptionKey, key)
+	if err != nil {
+		return err
+	}
+
 	mw := io.MultiWriter(peers...)
 	mw.Write([]byte{p2p.IncomingStream})
-	n, err := copyEncrypt(s.EncryptionKey, fileBuf, mw)
+
+	// Copy plaintext to peers
+	written, err := io.Copy(mw, fileReader)
 	if err != nil {
 		return err
 	}
@@ -338,7 +461,7 @@ func (s *FileServer) Store(key string, r io.Reader) error {
 		}
 	}
 
-	fmt.Printf("[%s] Received and written %d bytes to disk\n", s.Transport.Address(), n)
+	fmt.Printf("[%s] Received and written %d bytes to disk (encrypted), sent %d bytes (plaintext) to peers\n", s.Transport.Address(), n, written)
 
 	return nil
 }
@@ -417,17 +540,24 @@ func (s *FileServer) OnPeer(p p2p.Peer) error {
 			LastSeen: &now,
 		})
 	}
-	
+
 	// Send peer exchange to newly connected peer (after lock is released)
 	go func() {
 		// Small delay to ensure connection is fully established
 		time.Sleep(500 * time.Millisecond)
-		if err := s.sendPeerExchange(peerAddr); err != nil {
-			// Only log unexpected errors (filtering done in sendPeerExchange)
-			fmt.Printf("[%s] Error sending peer exchange to %s: %v\n", s.Transport.Address(), peerAddr, err)
+
+		// Retry a few times if database is locked
+		for i := 0; i < 5; i++ {
+			if err := s.sendPeerExchange(peerAddr); err != nil {
+				// Only log unexpected errors (filtering done in sendPeerExchange)
+				fmt.Printf("[%s] Error sending peer exchange to %s: %v (attempt %d/5)\n", s.Transport.Address(), peerAddr, err, i+1)
+				time.Sleep(1 * time.Second)
+				continue
+			}
+			break
 		}
 	}()
-	
+
 	return nil
 }
 
@@ -490,6 +620,9 @@ type FileServer struct {
 
 	store  *Store
 	quitch chan struct{}
+
+	pendingFileTransfers map[string]MessageStoreFile
+	downloadChannels     map[string]chan struct{}
 }
 
 func NewFileServer(opts FileServerOpts) *FileServer {
@@ -498,10 +631,12 @@ func NewFileServer(opts FileServerOpts) *FileServer {
 		PathTransformFunc: opts.PathTransformFunc,
 	}
 	return &FileServer{
-		FileServerOpts: opts,
-		store:          NewStore(storeOpts),
-		quitch:         make(chan struct{}),
-		peers:          make(map[string]p2p.Peer),
+		FileServerOpts:       opts,
+		store:                NewStore(storeOpts),
+		quitch:               make(chan struct{}),
+		peers:                make(map[string]p2p.Peer),
+		pendingFileTransfers: make(map[string]MessageStoreFile),
+		downloadChannels:     make(map[string]chan struct{}),
 	}
 }
 

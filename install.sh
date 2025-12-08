@@ -14,11 +14,11 @@ fi
 
 # Build the binary
 echo "Building binary..."
-go build -o DecentralizedP2PStorage
+go build -o bin/p2p
 
 # Install binary
 echo "Installing binary to /usr/local/bin/ (requires sudo)..."
-sudo cp DecentralizedP2PStorage /usr/local/bin/
+sudo cp bin/p2p /usr/local/bin/DecentralizedP2PStorage
 sudo chmod +x /usr/local/bin/DecentralizedP2PStorage
 
 # Create config directory

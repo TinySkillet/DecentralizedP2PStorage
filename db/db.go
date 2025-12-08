@@ -14,13 +14,10 @@ type DB struct {
 
 func Open(path string) (*DB, error) {
 	// e.g., path = "p2p.db"
-	d, err := sql.Open("sqlite", path)
+	// Set pragmas via DSN to ensure they apply to all connections
+	dsn := path + "?_pragma=busy_timeout=5000&_pragma=journal_mode=WAL"
+	d, err := sql.Open("sqlite", dsn)
 	if err != nil {
-		return nil, err
-	}
-	// busy timeout reasonable for single-process writes
-	if _, err := d.Exec(`PRAGMA busy_timeout=3000;`); err != nil {
-		_ = d.Close()
 		return nil, err
 	}
 	return &DB{sql: d, path: path}, nil

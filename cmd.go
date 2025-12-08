@@ -26,7 +26,7 @@ func setupCommands() *cobra.Command {
 	root.PersistentFlags().StringVar(&dbPath, "db", "p2p.db", "sqlite database path")
 
 	// Serve command
-	
+
 	serveCmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start a P2P storage node",
@@ -37,7 +37,7 @@ func setupCommands() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("error loading config: %v", err)
 				}
-				
+
 				// Apply config values if flags weren't explicitly set
 				if !cmd.Flags().Changed("listen") && cfg.Listen != "" {
 					listen = cfg.Listen
@@ -49,7 +49,7 @@ func setupCommands() *cobra.Command {
 					bootstrap = cfg.Bootstrap
 				}
 			}
-			
+
 			// Original serve logic
 			d, err := dbpkg.Open(dbPath)
 			if err != nil {
@@ -101,8 +101,8 @@ func setupCommands() *cobra.Command {
 			s := makeServerWithDB(listen, d, bootstrap...)
 			s.EncryptionKey = keyBytes
 			go func() { log.Fatal(s.Start()) }()
-			// Wait for connections to establish
-			time.Sleep(500 * time.Millisecond)
+			// Wait for connections to establish and peer discovery
+			time.Sleep(2 * time.Second)
 			if len(bootstrap) > 0 {
 				if err := s.waitForPeers(5 * time.Second); err != nil {
 					fmt.Printf("Warning: %v. Proceeding with store anyway.\n", err)
@@ -288,17 +288,17 @@ func setupCommands() *cobra.Command {
 			if err := d.Migrate(context.Background()); err != nil {
 				return err
 			}
-			
+
 			peers, err := d.GetActivePeers(context.Background(), 24*time.Hour, 100)
 			if err != nil {
 				return err
 			}
-			
+
 			if len(peers) == 0 {
 				fmt.Println("No peers found.")
 				return nil
 			}
-			
+
 			fmt.Printf("%-30s\t%-15s\t%s\n", "ADDRESS", "STATUS", "LAST SEEN")
 			fmt.Println(strings.Repeat("-", 70))
 			for _, p := range peers {
@@ -319,19 +319,19 @@ func setupCommands() *cobra.Command {
 		Short: "Remove stale peer records from database",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			d, err := dbpkg.Open(dbPath)
-			if err != nil{
+			if err != nil {
 				return err
 			}
 			defer d.Close()
 			if err := d.Migrate(context.Background()); err != nil {
 				return err
 			}
-			
+
 			removed, err := d.CleanupStalePeers(context.Background(), 1*time.Hour)
 			if err != nil {
 				return err
 			}
-			
+
 			fmt.Printf("Removed %d stale peer(s)\n", removed)
 			return nil
 		},

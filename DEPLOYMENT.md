@@ -9,6 +9,7 @@
 ```
 
 This will:
+
 - Build the binary
 - Install to `/usr/local/bin/`
 - Create config directory `~/.p2p/`
@@ -99,6 +100,7 @@ Edit `/etc/systemd/system/p2p-storage@.service` to customize:
 - **Database path:** Change `--db` path
 
 After editing:
+
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl restart p2p-storage@$USER
@@ -130,6 +132,7 @@ For a production network, set up dedicated bootstrap nodes:
 3. **Configure other nodes** to bootstrap to these stable nodes
 
 Example:
+
 ```bash
 # Bootstrap Node 1 (always-on server)
 ./DecentralizedP2PStorage serve --listen :3000 --db ~/.p2p/p2p.db
@@ -181,11 +184,12 @@ sqlite3 ~/.p2p/p2p.db "SELECT name, size FROM files;"
 ### Port Already in Use
 
 Change the listen port:
+
 ```bash
 ./DecentralizedP2PStorage serve --listen :3001 --db ~/.p2p/p2p.db
 ```
 
-### Can't Connect  to Remote Peers
+### Can't Connect to Remote Peers
 
 1. Check firewall allows the port
 2. Verify IP address is correct
@@ -194,18 +198,9 @@ Change the listen port:
 ### Database Locked Errors
 
 Only one instance can use a database at a time. Use different DB paths for different nodes:
+
 ```bash
 ./DecentralizedP2PStorage serve --listen :3000 --db ~/.p2p/node1.db
 ./DecentralizedP2PStorage serve --listen :4000 --db ~/.p2p/node2.db
 ```
 
----
-
-## Production Checklist
-
-- [ ] Bootstrap nodes configured and running
-- [ ] Firewall ports opened
-- [ ] Systemd service enabled
-- [ ] Monitoring set up (logs, peer count)
-- [ ] Backup strategy for database
-- [ ] Regular cleanup of stale peers scheduled

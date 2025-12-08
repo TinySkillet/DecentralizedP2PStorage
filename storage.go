@@ -42,14 +42,38 @@ func (s *Store) Write(key string, r io.Reader) (int64, error) {
 	return s.writeStream(key, r)
 }
 
-func (s *Store) WriteDecrypt(encryptionKey []byte, key string, r io.Reader) (int64, error) {
-
+func (s *Store) WriteEncrypt(encryptionKey []byte, key string, r io.Reader) (int64, error) {
 	f, err := s.openFileForWriting(key)
 	if err != nil {
 		return 0, err
 	}
-	n, err := copyDecrypt(encryptionKey, r, f)
+	n, err := copyEncrypt(encryptionKey, r, f)
 	return int64(n), err
+}
+
+func (s *Store) ReadDecrypt(encryptionKey []byte, key string) (int64, io.Reader, error) {
+	f, err := s.openFileForReading(key)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	// We need to decrypt on the fly
+	// Since copyDecrypt writes to a writer, we need a pipe
+	pr, pw := io.Pipe()
+
+	go func() {
+		_, err := copyDecrypt(encryptionKey, f, pw)
+		pw.CloseWithError(err)
+		f.Close()
+	}()
+
+	return 0, pr, nil // Size is unknown/hard to calculate without reading
+}
+
+func (s *Store) openFileForReading(key string) (*os.File, error) {
+	pathKey := s.PathTransformFunc(key)
+	fullPath := fmt.Sprintf("%s/%s", s.Root, pathKey.FullPath())
+	return os.Open(fullPath)
 }
 
 func (s *Store) writeStream(key string, r io.Reader) (int64, error) {
@@ -70,7 +94,7 @@ func (s *Store) Delete(key string) error {
 		log.Printf("Failed to delete [%s] from disk: %v\n", pathKey.Filename, err)
 		return err
 	}
-	
+
 	log.Printf("Deleted [%s] from disk\n", pathKey.Filename)
 	return nil
 }
