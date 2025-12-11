@@ -57,8 +57,6 @@ func (s *Store) ReadDecrypt(encryptionKey []byte, key string) (int64, io.Reader,
 		return 0, nil, err
 	}
 
-	// We need to decrypt on the fly
-	// Since copyDecrypt writes to a writer, we need a pipe
 	pr, pw := io.Pipe()
 
 	go func() {
@@ -67,7 +65,7 @@ func (s *Store) ReadDecrypt(encryptionKey []byte, key string) (int64, io.Reader,
 		f.Close()
 	}()
 
-	return 0, pr, nil // Size is unknown/hard to calculate without reading
+	return 0, pr, nil
 }
 
 func (s *Store) openFileForReading(key string) (*os.File, error) {
@@ -169,7 +167,6 @@ type Store struct {
 }
 
 type StoreOpts struct {
-	// Root is the root folder containing all files and folders of the p2p system
 	Root              string
 	PathTransformFunc PathTransformFunc
 }
@@ -187,9 +184,7 @@ func NewStore(opts StoreOpts) *Store {
 	}
 }
 
-// FullPathForKey returns the absolute path on disk where the file for the given
-// logical key is stored. This is useful for metadata recording. It does not
-// perform any filesystem access.
+// FullPathForKey returns absolute path for key storage without filesystem access
 func (s *Store) FullPathForKey(key string) string {
 	pathKey := s.PathTransformFunc(key)
 	return fmt.Sprintf("%s/%s", s.Root, pathKey.FullPath())

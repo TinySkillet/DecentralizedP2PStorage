@@ -25,20 +25,16 @@ func setupCommands() *cobra.Command {
 	root := &cobra.Command{Use: "p2p", Short: "Decentralized P2P storage node"}
 	root.PersistentFlags().StringVar(&dbPath, "db", "p2p.db", "sqlite database path")
 
-	// Serve command
-
 	serveCmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start a P2P storage node",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Load config file if specified
 			if configPath != "" {
 				cfg, err := LoadConfig(configPath)
 				if err != nil {
 					return fmt.Errorf("error loading config: %v", err)
 				}
 
-				// Apply config values if flags weren't explicitly set
 				if !cmd.Flags().Changed("listen") && cfg.Listen != "" {
 					listen = cfg.Listen
 				}
@@ -50,7 +46,6 @@ func setupCommands() *cobra.Command {
 				}
 			}
 
-			// Original serve logic
 			d, err := dbpkg.Open(dbPath)
 			if err != nil {
 				return err
@@ -101,7 +96,6 @@ func setupCommands() *cobra.Command {
 			s := makeServerWithDB(listen, d, bootstrap...)
 			s.EncryptionKey = keyBytes
 			go func() { log.Fatal(s.Start()) }()
-			// Wait for connections to establish and peer discovery
 			time.Sleep(2 * time.Second)
 			if len(bootstrap) > 0 {
 				if err := s.waitForPeers(5 * time.Second); err != nil {
@@ -139,7 +133,6 @@ func setupCommands() *cobra.Command {
 			s := makeServerWithDB(listen, d, bootstrap...)
 			s.EncryptionKey = keyBytes
 			go func() { log.Fatal(s.Start()) }()
-			// Wait for connections to establish
 			time.Sleep(500 * time.Millisecond)
 			if len(bootstrap) > 0 {
 				if err := s.waitForPeers(5 * time.Second); err != nil {
@@ -191,7 +184,6 @@ func setupCommands() *cobra.Command {
 			s := makeServerWithDB(listen, d, bootstrap...)
 			s.EncryptionKey = keyBytes
 			go func() { log.Fatal(s.Start()) }()
-			// Wait for connections to establish
 			time.Sleep(500 * time.Millisecond)
 			if len(bootstrap) > 0 {
 				if err := s.waitForPeers(5 * time.Second); err != nil {
@@ -275,7 +267,6 @@ func setupCommands() *cobra.Command {
 	}
 	root.AddCommand(sharesCmd)
 
-	// peers command - list known peers
 	peersCmd := &cobra.Command{
 		Use:   "peers",
 		Short: "List connected and known peers",
@@ -313,7 +304,6 @@ func setupCommands() *cobra.Command {
 	}
 	root.AddCommand(peersCmd)
 
-	// cleanup command - remove stale peers
 	cleanupCmd := &cobra.Command{
 		Use:   "cleanup",
 		Short: "Remove stale peer records from database",
@@ -338,7 +328,6 @@ func setupCommands() *cobra.Command {
 	}
 	root.AddCommand(cleanupCmd)
 
-	// demo: preserves old behavior behind a command
 	demoCmd := &cobra.Command{
 		Use:   "demo",
 		Short: "Run the local 3-node demo",

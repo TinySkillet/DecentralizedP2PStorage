@@ -8,23 +8,18 @@ import (
 	"sync"
 )
 
-// Implements the Transport interface
 func (t TCPTransport) Close() error {
 	return t.listener.Close()
 }
 
-// Implements the Transport interface
 func (t *TCPTransport) Address() string {
 	return t.ListenAddr
 }
 
-// Consume implements the Transport interface, which returns a read only channel for
-// reading incoming messages from another peer
 func (t *TCPTransport) Consume() <-chan RPC {
 	return t.rpcChan
 }
 
-// Implements the Transport interface
 func (t *TCPTransport) Dial(addr string) error {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
@@ -82,7 +77,6 @@ func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
 		}
 	}
 
-	// Read Loop
 	for {
 		rpc := RPC{}
 		err = t.Decoder.Decode(conn, &rpc)
@@ -108,26 +102,19 @@ func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
 	}
 }
 
-// TCPPeer represents the remote node over a TCP connection.
 type TCPPeer struct {
-	// underlying connection of the peer
-	// in this case is a tcp connection
 	net.Conn
 
-	// If we dial and retrieve a conn: outbound = true.
-	// If we accept and retrieve a conn:  outbound = false.
 	outbound bool
 
 	wg *sync.WaitGroup
 }
 
-// implements the Peer interface
 func (p *TCPPeer) Send(b []byte) error {
 	_, err := p.Conn.Write(b)
 	return err
 }
 
-// implements the Peer interface
 func (p *TCPPeer) CloseStream() {
 	p.wg.Done()
 }

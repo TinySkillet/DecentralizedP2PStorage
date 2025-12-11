@@ -13,8 +13,6 @@ type DB struct {
 }
 
 func Open(path string) (*DB, error) {
-	// e.g., path = "p2p.db"
-	// Set pragmas via DSN to ensure they apply to all connections
 	dsn := path + "?_pragma=busy_timeout=5000&_pragma=journal_mode=WAL"
 	d, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -25,7 +23,6 @@ func Open(path string) (*DB, error) {
 
 func (d *DB) Close() error { return d.sql.Close() }
 
-// Path returns the database file path
 func (d *DB) Path() string { return d.path }
 
 func (d *DB) Migrate(ctx context.Context) error {

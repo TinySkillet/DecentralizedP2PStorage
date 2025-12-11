@@ -122,47 +122,15 @@ func (s *FileServer) handleStream(from string) error {
 		return nil
 	}
 
-	// Check for pending download (GetFile)
-	// We need to know WHICH file is being downloaded.
-	// But handleStream only knows 'from'.
-	// We need a map[from]chan struct{} for downloads too?
-	// Or map[from]expectedKey?
-
-	// Since Get is synchronous, we can assume only one download per peer at a time?
-	// Or we can use pendingDownloads map[string]chan struct{} where key is... peer?
-	// But Get broadcasts to ALL peers.
-	// Any peer might respond.
-
-	// If we use pendingDownloads map[string]chan struct{} where key is fileKey (hash).
-	// But handleStream doesn't know fileKey!
-
-	// Wait, if we use MessageStoreFile for downloads too (as planned),
-	// then the responder sends MessageStoreFile FIRST.
-	// So it ends up in pendingFileTransfers!
-	// So the logic above handles it automatically!
-
-	// The only difference is that for Get, we might want to signal the Get caller.
-	// But Get caller can just check if file exists?
-	// Or we can have a separate notification mechanism.
-
-	// If Get caller waits for file to exist, we are good.
-
 	return fmt.Errorf("peer %s sent a stream but no pending transfer was found", from)
 }
 
 func (s *FileServer) handleMessageGetFile(from string, msg MessageGetFile) error {
 	fmt.Printf("[%s] Received request to serve file '%s'\n", s.Transport.Address(), msg.Key)
 
-	// Try to find the file.
-	// It could be stored with original key (if we are uploader) or hashed key (if we are peer).
-
 	keyToRead := msg.Key
 
 	if s.DB != nil {
-		// Check if we have the original key mapping
-		// We need a way to look up file by hash.
-		// ListFiles is inefficient but works for now.
-		// Ideally we should have GetFileByHash.
 		files, err := s.DB.ListFiles(context.Background())
 		if err == nil {
 			for _, f := range files {
@@ -175,28 +143,16 @@ func (s *FileServer) handleMessageGetFile(from string, msg MessageGetFile) error
 		}
 	}
 
-	// Read from disk (Encrypted) -> Decrypt -> Send Plaintext
-	// We use ReadDecrypt to get plaintext reader
-
-	// Use s.store.Read which is public
 	encSize, r, err := s.store.Read(keyToRead)
 	if err != nil {
-		// If failed with original key (or default hashed key), try the other one?
-		// If we switched to original key, maybe we should fallback?
-		// But if DB says we have it, we should have it.
 		return fmt.Errorf("[%s] Failed to read file %s: %v", s.Transport.Address(), keyToRead, err)
 	}
 	if rc, ok := r.(io.ReadCloser); ok {
 		rc.Close()
 	}
 
-	// Note: ReadDecrypt returns 0 size because it's a stream.
-	// We need to know the size to send MessageStoreFile.
-	// We can get encrypted size from DB or disk, and subtract 16.
-
 	plaintextSize := encSize - 16
 
-	// Now open decrypt stream
 	_, fileReader, err := s.store.ReadDecrypt(s.EncryptionKey, keyToRead)
 	if err != nil {
 		return err
@@ -207,7 +163,6 @@ func (s *FileServer) handleMessageGetFile(from string, msg MessageGetFile) error
 		return fmt.Errorf("peer %s not found in peer list", from)
 	}
 
-	// Send MessageStoreFile first (acting as uploader)
 	storeMsg := Message{
 		Payload: MessageStoreFile{
 			Key:  msg.Key,
@@ -228,7 +183,6 @@ func (s *FileServer) handleMessageGetFile(from string, msg MessageGetFile) error
 
 	time.Sleep(100 * time.Millisecond)
 
-	// send the 'IncomingStream' byte to the peer first
 	peer.Send([]byte{p2p.IncomingStream})
 
 	n, err := io.Copy(peer, fileReader)
@@ -243,14 +197,8 @@ func (s *FileServer) handleMessageGetFile(from string, msg MessageGetFile) error
 func (s *FileServer) handleMessageDeleteFile(from string, msg MessageDeleteFile) error {
 	fmt.Printf("[%s] Received delete request for file with hash '%s' from %s\n", s.Transport.Address(), msg.Key, from)
 
-	// The msg.Key is the hashed key. Files can be stored in two ways:
-	// 1. Locally stored with original key (metadata in DB, file stored with hashed path)
-	// 2. Received from peer with hashed key (no metadata, file stored with double-hashed path)
-	// We need to try both approaches.
-
 	var originalKey string
 	if s.DB != nil {
-		// Try to find the file by hash in the database to get the original key
 		files, err := s.DB.ListFiles(context.Background())
 		if err == nil {
 			for _, f := range files {
@@ -262,9 +210,6 @@ func (s *FileServer) handleMessageDeleteFile(from string, msg MessageDeleteFile)
 		}
 	}
 
-	// Delete from database if configured
-	// Note: For peer messages, we log warnings but continue with file deletion
-	// to honor the delete request, even if DB cleanup fails
 	dbDeleteFailed := false
 	if s.DB != nil {
 		if err := s.DB.DeleteFile(context.Background(), msg.Key); err != nil {
@@ -275,28 +220,29 @@ func (s *FileServer) handleMessageDeleteFile(from string, msg MessageDeleteFile)
 		}
 	}
 
-	// First, try to delete using original key (if file was stored locally)
+	fileDeleted := false
+
 	if originalKey != "" {
 		if s.store.Has(originalKey) {
 			if err := s.store.Delete(originalKey); err != nil {
 				return fmt.Errorf("[%s] Error deleting file '%s': %v", s.Transport.Address(), originalKey, err)
 			}
 			fmt.Printf("[%s] Deleted file '%s' from local storage\n", s.Transport.Address(), originalKey)
-			return nil
+			fileDeleted = true
 		}
 	}
 
-	// If original key approach didn't work, try deleting using the hashed key directly
-	// (for files received from peers, which were stored with the hashed key)
-	if s.store.Has(msg.Key) {
+	if !fileDeleted && s.store.Has(msg.Key) {
 		if err := s.store.Delete(msg.Key); err != nil {
 			return fmt.Errorf("[%s] Error deleting file with hash '%s': %v", s.Transport.Address(), msg.Key, err)
 		}
 		fmt.Printf("[%s] Deleted file with hash '%s' from local storage\n", s.Transport.Address(), msg.Key)
-		return nil
+		fileDeleted = true
 	}
 
-	fmt.Printf("[%s] File with hash '%s' does not exist locally, skipping deletion\n", s.Transport.Address(), msg.Key)
+	if !fileDeleted {
+		fmt.Printf("[%s] File with hash '%s' does not exist locally, skipping deletion\n", s.Transport.Address(), msg.Key)
+	}
 
 	if dbDeleteFailed {
 		fmt.Printf("[%s] WARNING: Database inconsistency - file deleted from disk but database cleanup failed for hash '%s'\n", s.Transport.Address(), msg.Key)
@@ -305,9 +251,6 @@ func (s *FileServer) handleMessageDeleteFile(from string, msg MessageDeleteFile)
 }
 
 func (s *FileServer) stream(msg *Message) error {
-
-	// Peer implements net.Conn which implements Writer interface
-	// therefore we can use Peer as a writer
 	peers := []io.Writer{}
 	for _, peer := range s.peers {
 		peers = append(peers, peer)
@@ -385,7 +328,6 @@ func (s *FileServer) Store(key string, r io.Reader) error {
 
 	plaintextSize := n - 16
 
-	// Record file metadata if DB is configured
 	if s.DB != nil {
 		_ = s.DB.InsertFileWithKey(context.Background(), dbpkg.File{
 			ID:        hashKey(key),
@@ -396,7 +338,6 @@ func (s *FileServer) Store(key string, r io.Reader) error {
 		}, "default")
 	}
 
-	// Capture peers
 	s.peersLock.Lock()
 	peers := []io.Writer{}
 	peerAddrs := []string{}
@@ -413,7 +354,6 @@ func (s *FileServer) Store(key string, r io.Reader) error {
 		},
 	}
 
-	// Broadcast to captured peers
 	buf := new(bytes.Buffer)
 	if err := gob.NewEncoder(buf).Encode(&msg); err != nil {
 		return err
@@ -431,8 +371,6 @@ func (s *FileServer) Store(key string, r io.Reader) error {
 		}
 	}
 
-	// 3. Stream Plaintext to peers.
-	// Read from disk (Encrypted) -> Decrypt -> Send.
 	_, fileReader, err := s.store.ReadDecrypt(s.EncryptionKey, key)
 	if err != nil {
 		return err
@@ -441,13 +379,11 @@ func (s *FileServer) Store(key string, r io.Reader) error {
 	mw := io.MultiWriter(peers...)
 	mw.Write([]byte{p2p.IncomingStream})
 
-	// Copy plaintext to peers
 	written, err := io.Copy(mw, fileReader)
 	if err != nil {
 		return err
 	}
 
-	// Record shares for each peer that received the file
 	if s.DB != nil {
 		fileID := hashKey(key)
 		for _, addr := range peerAddrs {
@@ -467,20 +403,16 @@ func (s *FileServer) Store(key string, r io.Reader) error {
 }
 
 func (s *FileServer) Delete(key string) error {
-	// Delete from database if configured
 	if s.DB != nil {
 		fileID := hashKey(key)
 		if err := s.DB.DeleteFile(context.Background(), fileID); err != nil {
-			// Fail fast to maintain consistency: if DB delete fails, don't delete the file
 			return fmt.Errorf("[%s] Failed to delete file '%s' from database: %v. File not deleted from disk to maintain consistency", s.Transport.Address(), key, err)
 		}
 		fmt.Printf("[%s] Deleted file '%s' from database\n", s.Transport.Address(), key)
 	}
 
-	// Delete locally first
 	if !s.store.Has(key) {
 		fmt.Printf("[%s] File '%s' does not exist locally\n", s.Transport.Address(), key)
-		// Still broadcast the delete in case other peers have it
 	} else {
 		if err := s.store.Delete(key); err != nil {
 			return err
@@ -488,7 +420,6 @@ func (s *FileServer) Delete(key string) error {
 		fmt.Printf("[%s] Deleted file '%s' from local storage\n", s.Transport.Address(), key)
 	}
 
-	// Check if we have any peers connected
 	s.peersLock.Lock()
 	peerCount := len(s.peers)
 	peerAddrs := make([]string, 0, len(s.peers))
@@ -504,7 +435,6 @@ func (s *FileServer) Delete(key string) error {
 		return nil
 	}
 
-	// Broadcast delete message to all peers
 	msg := Message{
 		Payload: MessageDeleteFile{
 			Key: hashKey(key),
@@ -523,7 +453,6 @@ func (s *FileServer) Stop() {
 	close(s.quitch)
 }
 
-// in OnPeer
 func (s *FileServer) OnPeer(p p2p.Peer) error {
 	s.peersLock.Lock()
 	defer s.peersLock.Unlock()
@@ -541,15 +470,11 @@ func (s *FileServer) OnPeer(p p2p.Peer) error {
 		})
 	}
 
-	// Send peer exchange to newly connected peer (after lock is released)
 	go func() {
-		// Small delay to ensure connection is fully established
 		time.Sleep(500 * time.Millisecond)
 
-		// Retry a few times if database is locked
 		for i := 0; i < 5; i++ {
 			if err := s.sendPeerExchange(peerAddr); err != nil {
-				// Only log unexpected errors (filtering done in sendPeerExchange)
 				fmt.Printf("[%s] Error sending peer exchange to %s: %v (attempt %d/5)\n", s.Transport.Address(), peerAddr, err, i+1)
 				time.Sleep(1 * time.Second)
 				continue
@@ -594,7 +519,6 @@ func (s *FileServer) waitForPeers(timeout time.Duration) error {
 	return fmt.Errorf("timeout waiting for peer connections")
 }
 
-// register MessageStoreFile on gob, since we use any for payload
 func init() {
 	gob.Register(MessageStoreFile{})
 	gob.Register(MessageGetFile{})

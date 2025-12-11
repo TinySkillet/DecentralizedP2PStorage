@@ -92,8 +92,7 @@ func (d *DB) ListFiles(ctx context.Context) ([]File, error) {
 	return out, rows.Err()
 }
 
-// GetActivePeers returns peers that have been seen recently (within maxAge).
-// This is used for peer discovery/gossip protocol to share known peers with others.
+// Returns recently active peers for discovery
 func (d *DB) GetActivePeers(ctx context.Context, maxAge time.Duration, limit int) ([]Peer, error) {
 	cutoff := time.Now().Add(-maxAge)
 	rows, err := d.sql.QueryContext(ctx, `
@@ -113,7 +112,6 @@ func (d *DB) GetActivePeers(ctx context.Context, maxAge time.Duration, limit int
 		var p Peer
 		var lastSeenStr string
 
-		// Scan with last_seen as string first
 		if err := rows.Scan(&p.ID, &p.Address, &p.Status, &lastSeenStr); err != nil {
 			return nil, err
 		}
@@ -129,18 +127,13 @@ func (d *DB) GetActivePeers(ctx context.Context, maxAge time.Duration, limit int
 				lastSeenStr = lastSeenStr[:idx]
 			}
 
-			// After stripping monotonic clock: "2025-12-07 21:16:45.473359503 +0545 +0545"
-			// Go's time.String() duplicates timezone - remove the second occurrence
-			// We need to keep only one timezone offset
-			parts := strings.Fields(lastSeenStr) // Split by whitespace
+			parts := strings.Fields(lastSeenStr)
 			if len(parts) >= 3 {
 				// parts = ["2025-12-07", "21:16:45.473359503", "+0545", "+0545"]
 				// Keep only first 3 parts (date, time, first timezone)
 				lastSeenStr = strings.Join(parts[:3], " ")
 			}
 
-			// Now parse with the standard Go time layout
-			// Format after cleanup: "2025-12-07 21:16:45.473359503 +0545"
 			parsedTime, err := time.Parse("2006-01-02 15:04:05.999999999 -0700", lastSeenStr)
 			if err != nil {
 				// Try without nanoseconds
@@ -157,8 +150,7 @@ func (d *DB) GetActivePeers(ctx context.Context, maxAge time.Duration, limit int
 	return out, rows.Err()
 }
 
-// CleanupStalePeers removes peer records that haven't been seen within maxAge duration.
-// Returns the number of peers removed.
+// Removes stale peer records
 func (d *DB) CleanupStalePeers(ctx context.Context, maxAge time.Duration) (int, error) {
 	cutoff := time.Now().Add(-maxAge)
 	result, err := d.sql.ExecContext(ctx, `
@@ -176,7 +168,6 @@ func (d *DB) CleanupStalePeers(ctx context.Context, maxAge time.Duration) (int, 
 	return int(rowsAffected), nil
 }
 
-// GetKey returns a key by id.
 func (d *DB) GetKey(ctx context.Context, id string) (*Key, error) {
 	row := d.sql.QueryRowContext(ctx, `
 		SELECT id,label,algo,key_bytes,created_at FROM keys WHERE id=?
@@ -188,7 +179,6 @@ func (d *DB) GetKey(ctx context.Context, id string) (*Key, error) {
 	return &k, nil
 }
 
-// PutKey inserts or replaces a key.
 func (d *DB) PutKey(ctx context.Context, k Key) error {
 	_, err := d.sql.ExecContext(ctx, `
 		INSERT INTO keys(id,label,algo,key_bytes,created_at)
@@ -201,14 +191,12 @@ func (d *DB) PutKey(ctx context.Context, k Key) error {
 	return err
 }
 
-// GetOrCreateDefaultKey returns bytes for key id "default"; creates it if missing.
 func (d *DB) GetOrCreateDefaultKey(ctx context.Context, gen func() []byte) ([]byte, error) {
 	const id = "default"
 	k, err := d.GetKey(ctx, id)
 	if err == nil {
 		return k.KeyBytes, nil
 	}
-	// If not found, create.
 	keyBytes := gen()
 	if err := d.PutKey(ctx, Key{
 		ID:       id,
@@ -228,8 +216,6 @@ type ShareInfo struct {
 	FileSize int64
 }
 
-// InsertShare inserts or updates a share record.
-// shareID is typically a hash of fileID + peerID + direction to ensure uniqueness.
 func (d *DB) InsertShare(ctx context.Context, share Share) error {
 	_, err := d.sql.ExecContext(ctx, `
 		INSERT INTO shares(id, file_id, peer_id, direction, created_at)
@@ -240,7 +226,6 @@ func (d *DB) InsertShare(ctx context.Context, share Share) error {
 	return err
 }
 
-// ListShares returns all share records with file information.
 func (d *DB) ListShares(ctx context.Context) ([]ShareInfo, error) {
 	rows, err := d.sql.QueryContext(ctx, `
 		SELECT s.id, s.file_id, s.peer_id, s.direction, s.created_at,
@@ -265,8 +250,6 @@ func (d *DB) ListShares(ctx context.Context) ([]ShareInfo, error) {
 	return out, rows.Err()
 }
 
-// DeleteFile deletes a file and all its related records from the database.
-// fileID is the hashed key used as the file's ID in the database.
 func (d *DB) DeleteFile(ctx context.Context, fileID string) error {
 	tx, err := d.sql.BeginTx(ctx, nil)
 	if err != nil {
@@ -274,21 +257,18 @@ func (d *DB) DeleteFile(ctx context.Context, fileID string) error {
 	}
 	defer tx.Rollback()
 
-	// Delete from file_keys table
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM file_keys WHERE file_id = ?
 	`, fileID); err != nil {
 		return err
 	}
 
-	// Delete from shares table
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM shares WHERE file_id = ?
 	`, fileID); err != nil {
 		return err
 	}
 
-	// Delete from files table
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM files WHERE id = ?
 	`, fileID); err != nil {
