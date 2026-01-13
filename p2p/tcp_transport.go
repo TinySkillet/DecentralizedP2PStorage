@@ -84,7 +84,7 @@ func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
 			return
 		}
 
-		rpc.From = conn.RemoteAddr().String()
+		rpc.From = peer.RemoteAddr().String()
 
 		if rpc.Stream {
 			peer.wg.Add(1)
@@ -108,6 +108,19 @@ type TCPPeer struct {
 	outbound bool
 
 	wg *sync.WaitGroup
+
+	// FullAddr is the verified listening address of the peer
+	FullAddr string
+}
+
+func (p *TCPPeer) RemoteAddr() net.Addr {
+	if p.FullAddr != "" {
+		addr, err := net.ResolveTCPAddr("tcp", p.FullAddr)
+		if err == nil {
+			return addr
+		}
+	}
+	return p.Conn.RemoteAddr()
 }
 
 func (p *TCPPeer) Send(b []byte) error {

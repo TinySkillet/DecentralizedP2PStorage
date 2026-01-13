@@ -21,7 +21,7 @@ func getStorageRoot(listenAddr string) string {
 func makeServer(listenAddr string, nodes ...string) *FileServer {
 	tcpTransportOpts := p2p.TCPTransportOpts{
 		ListenAddr:    listenAddr,
-		HandshakeFunc: p2p.NOPHandshakeFunc,
+		HandshakeFunc: GetHandshakeFunc(listenAddr),
 		Decoder:       p2p.DefaultDecoder{},
 	}
 	tcpTransport := p2p.NewTCPTransport(tcpTransportOpts)
@@ -42,7 +42,7 @@ func makeServer(listenAddr string, nodes ...string) *FileServer {
 func makeServerWithDB(listenAddr string, db *dbpkg.DB, nodes ...string) *FileServer {
 	tcpTransportOpts := p2p.TCPTransportOpts{
 		ListenAddr:    listenAddr,
-		HandshakeFunc: p2p.NOPHandshakeFunc,
+		HandshakeFunc: GetHandshakeFunc(listenAddr),
 		Decoder:       p2p.DefaultDecoder{},
 	}
 	tcpTransport := p2p.NewTCPTransport(tcpTransportOpts)

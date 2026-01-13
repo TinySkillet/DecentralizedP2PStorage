@@ -96,11 +96,13 @@ func setupCommands() *cobra.Command {
 			s := makeServerWithDB(listen, d, bootstrap...)
 			s.EncryptionKey = keyBytes
 			go func() { log.Fatal(s.Start()) }()
-			time.Sleep(2 * time.Second)
+			time.Sleep(1 * time.Second)
 			if len(bootstrap) > 0 {
-				if err := s.waitForPeers(5 * time.Second); err != nil {
+				if err := s.waitForPeers(10 * time.Second); err != nil {
 					fmt.Printf("Warning: %v. Proceeding with store anyway.\n", err)
 				}
+				// Give peer discovery a bit more time to connect to ALL peers
+				time.Sleep(2 * time.Second)
 			}
 			return s.Store(key, f)
 		},
@@ -133,11 +135,12 @@ func setupCommands() *cobra.Command {
 			s := makeServerWithDB(listen, d, bootstrap...)
 			s.EncryptionKey = keyBytes
 			go func() { log.Fatal(s.Start()) }()
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(1 * time.Second)
 			if len(bootstrap) > 0 {
-				if err := s.waitForPeers(5 * time.Second); err != nil {
+				if err := s.waitForPeers(10 * time.Second); err != nil {
 					fmt.Printf("Warning: %v. Proceeding with get anyway.\n", err)
 				}
+				time.Sleep(1 * time.Second)
 			}
 			_, r, err := s.Get(key)
 			if err != nil {
@@ -184,11 +187,12 @@ func setupCommands() *cobra.Command {
 			s := makeServerWithDB(listen, d, bootstrap...)
 			s.EncryptionKey = keyBytes
 			go func() { log.Fatal(s.Start()) }()
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(1 * time.Second)
 			if len(bootstrap) > 0 {
-				if err := s.waitForPeers(5 * time.Second); err != nil {
+				if err := s.waitForPeers(10 * time.Second); err != nil {
 					fmt.Printf("Warning: %v. Proceeding with delete anyway.\n", err)
 				}
+				time.Sleep(1 * time.Second)
 			}
 			return s.Delete(key)
 		},

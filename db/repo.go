@@ -250,7 +250,28 @@ func (d *DB) ListShares(ctx context.Context) ([]ShareInfo, error) {
 	return out, rows.Err()
 }
 
+// GetOutgoingSharePeers returns peer addresses that have received the file (outgoing shares).
+func (d *DB) GetOutgoingSharePeers(ctx context.Context, fileID string) ([]string, error) {
+	rows, err := d.sql.QueryContext(ctx, `
+		SELECT peer_id FROM shares WHERE file_id = ? AND direction = 'outgoing'
+	`, fileID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var peers []string
+	for rows.Next() {
+		var peerID string
+		if err := rows.Scan(&peerID); err != nil {
+			return nil, err
+		}
+		peers = append(peers, peerID)
+	}
+	return peers, rows.Err()
+}
+
 func (d *DB) DeleteFile(ctx context.Context, fileID string) error {
+
 	tx, err := d.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return err

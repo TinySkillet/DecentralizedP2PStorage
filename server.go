@@ -403,14 +403,28 @@ func (s *FileServer) Store(key string, r io.Reader) error {
 }
 
 func (s *FileServer) Delete(key string) error {
+	fileID := hashKey(key)
+
+	// Query peers that have this file BEFORE deleting from DB
+	var sharePeers []string
 	if s.DB != nil {
-		fileID := hashKey(key)
+		peers, err := s.DB.GetOutgoingSharePeers(context.Background(), fileID)
+		if err != nil {
+			fmt.Printf("[%s] Warning: could not query share peers: %v\n", s.Transport.Address(), err)
+		} else {
+			sharePeers = peers
+		}
+	}
+
+	// Delete from local database
+	if s.DB != nil {
 		if err := s.DB.DeleteFile(context.Background(), fileID); err != nil {
 			return fmt.Errorf("[%s] Failed to delete file '%s' from database: %v. File not deleted from disk to maintain consistency", s.Transport.Address(), key, err)
 		}
 		fmt.Printf("[%s] Deleted file '%s' from database\n", s.Transport.Address(), key)
 	}
 
+	// Delete from local storage
 	if !s.store.Has(key) {
 		fmt.Printf("[%s] File '%s' does not exist locally\n", s.Transport.Address(), key)
 	} else {
@@ -420,6 +434,21 @@ func (s *FileServer) Delete(key string) error {
 		fmt.Printf("[%s] Deleted file '%s' from local storage\n", s.Transport.Address(), key)
 	}
 
+	// Connect to peers that have the file (from shares table)
+	if len(sharePeers) > 0 {
+		fmt.Printf("[%s] Connecting to %d peer(s) from shares: %v\n", s.Transport.Address(), len(sharePeers), sharePeers)
+		for _, addr := range sharePeers {
+			go func(addr string) {
+				if err := s.Transport.Dial(addr); err != nil {
+					fmt.Printf("[%s] Could not connect to share peer %s: %v\n", s.Transport.Address(), addr, err)
+				}
+			}(addr)
+		}
+		// Wait for connections to establish
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	// Now broadcast to all connected peers
 	s.peersLock.Lock()
 	peerCount := len(s.peers)
 	peerAddrs := make([]string, 0, len(s.peers))
@@ -437,7 +466,7 @@ func (s *FileServer) Delete(key string) error {
 
 	msg := Message{
 		Payload: MessageDeleteFile{
-			Key: hashKey(key),
+			Key: fileID,
 		},
 	}
 
@@ -454,10 +483,12 @@ func (s *FileServer) Stop() {
 }
 
 func (s *FileServer) OnPeer(p p2p.Peer) error {
+	peerAddr := p.RemoteAddr().String()
+
 	s.peersLock.Lock()
 	defer s.peersLock.Unlock()
-	s.peers[p.RemoteAddr().String()] = p
-	peerAddr := p.RemoteAddr().String()
+	s.peers[peerAddr] = p
+
 	fmt.Printf("[%s] Connected with remote %s\n", s.Transport.Address(), peerAddr)
 
 	if s.DB != nil {
@@ -484,6 +515,44 @@ func (s *FileServer) OnPeer(p p2p.Peer) error {
 	}()
 
 	return nil
+}
+
+type Handshake struct {
+	ListenAddr string
+}
+
+func GetHandshakeFunc(listenAddr string) p2p.HandshakeFunc {
+	return func(p any) error {
+		peer, ok := p.(*p2p.TCPPeer)
+		if !ok {
+			return fmt.Errorf("invalid peer type for TCP handshake")
+		}
+
+		hs := Handshake{
+			ListenAddr: listenAddr,
+		}
+
+		// 1. Send our handshake
+		buf := new(bytes.Buffer)
+		if err := gob.NewEncoder(buf).Encode(hs); err != nil {
+			return err
+		}
+
+		if err := peer.Send(buf.Bytes()); err != nil {
+			return err
+		}
+
+		// 2. Receive their handshake
+		var remoteHS Handshake
+		if err := gob.NewDecoder(peer).Decode(&remoteHS); err != nil {
+			return err
+		}
+
+		fmt.Printf("[%s] Handshake successful with %s\n", listenAddr, remoteHS.ListenAddr)
+		peer.FullAddr = remoteHS.ListenAddr
+
+		return nil
+	}
 }
 
 func (s *FileServer) bootstrapNetwork() error {
@@ -525,6 +594,7 @@ func init() {
 	gob.Register(MessageDeleteFile{})
 	gob.Register(MessagePeerExchange{})
 	gob.Register(PeerInfo{})
+	gob.Register(Handshake{})
 }
 
 type FileServerOpts struct {
