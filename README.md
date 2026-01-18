@@ -154,4 +154,3 @@ To remove the installation:
     ```bash
     rm -rf ~/.p2p
     ```
-
